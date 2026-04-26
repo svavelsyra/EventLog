@@ -1,0 +1,15 @@
+# EventLog - Testing/Development Requirements
+# Python 3.14
+# Using >= for version flexibility (no git to rollback, need bug fixes)
+
+# Install with: pip install -r requirements-test.txt
+# This will also install requirements.txt dependencies (if any)
+
+# First install app dependencies
+-r requirements.txt
+
+# Testing Dependencies
+pytest>=8.1.1              # Test framework
+pytest-cov>=4.1.0          # Coverage reporting
+pytest-rerunfailures>=14.0 # Retry flaky tests automatically
+
