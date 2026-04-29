@@ -1,30 +1,34 @@
-# MessageLog - Root Design Document
+# EventLog - Root Design Document
 
-**Project**: Radio Communication Message Logger  
+**Project**: Platoon Event Logger  
 **Version**: 1.0.0
-**Last Updated**: 2026-04-17  
+**Last Updated**: 2026-04-28  
 
 ## Domain Model
 
-### Core Entity: MessageLogEntry
+### Core Entry Types
 
-A message log entry represents a single event in radio communication operations.
+The application is no longer designed around one generic message-log entry. The root design now assumes separate entry types for the main operational use cases:
+
+- `CommunicationEntry` - radio messages, phone calls, written orders, and similar communications
+- `EventEntry` - operational events, incidents, observations, and status changes
+- `PersonnelEntry` - personnel/group tracking, location, and check-in management
 
 #### Required Fields
-1. **Message Content** (free text field)
-   - The actual message or event description
+1. **Primary content field** (free text field)
+   - The actual message, event description, or status/notes field depending on entry type
    - Type: String (unlimited length)
 
 2. **From** (sender/source)
-   - Who sent the message or initiated the event
+   - Relevant for communication entries
    - Type: String
 
 3. **To** (recipient/destination)
-   - Who received the message or was affected by the event
+   - Relevant for communication entries
    - Type: String
 
 4. **Event Time** (when it happened)
-   - Actual time of the event/message
+   - Actual time of the communication or event when that field is applicable
    - Type: DateTime
 
 5. **Logged Time** (when it was logged)
@@ -32,20 +36,23 @@ A message log entry represents a single event in radio communication operations.
    - Type: DateTime (auto-populated)
 
 6. **Communication Method** (how it was sent/received)
-   - Radio, phone, in-person, written order, etc.
+   - Radio, phone, in-person, written order, etc. for communication entries
    - Type: String (or enumeration)
 
 7. **Operator** (who logged it)
-   - The radio operator who made the log entry
+   - The operator who made the log entry
    - Type: String
 
 8. **Confirmed** (was it acknowledged?)
    - Whether the recipient confirmed receipt
    - Type: Boolean
 
-#### Additional Fields (TBD)
+#### Additional Fields
 - ID (primary key)
-- Additional metadata as needed
+- Type-specific metadata as needed
+- Edited-flag behavior should use a configurable grace period stored in the database `settings` table (default: 300 seconds)
+- Event entries may include `priority`, `category`, and `whom`
+- Personnel entries may include `status`, `location`, `active`, and check-in alarm fields
 
 ## User Interface Design
 
@@ -65,18 +72,36 @@ All fields from the MessageLogEntry entity, with:
 ## Database Design
 
 ### Tables
-- **event_log_entries** - main table for log entries
-- Additional tables as needed (operators, communication methods, etc.)
+- **communication_entries** - communication log entries
+- **event_entries** - operational event log entries
+- **personnel_entries** - personnel status/history entries
+- **structured_reports** - report templates attached to events
+- **communication_systems** / **channel_designations** / **system_capabilities_config** - communication configuration
+- **report_templates** / **categories** / **user_preferences** - runtime configuration and user-managed metadata
+- **settings** - low-level repository settings such as the edited-flag grace period in seconds
 
-### Database Adapter Interface
-Abstract base class must provide:
-- `create_entry()` - Add new log entry
-- `get_entry(id)` - Retrieve single entry
-- `get_all_entries()` - Retrieve all entries
-- `update_entry()` - Modify existing entry
-- `delete_entry()` - Remove entry
-- `search_entries()` - Filter/search functionality
-- `begin_transaction()`, `commit()`, `rollback()` - Transaction support
+### Persistence Layer Design
+
+#### Database Adapter Interface
+Low-level database adapter must provide operations such as:
+- `initialize_schema()`
+- `execute()`
+- `fetch()`
+- `fetchone()`
+- `begin_transaction()`, `commit_transaction()`, `rollback_transaction()`
+- `close()`
+
+#### Repository Layer
+Application-facing repositories provide CRUD and query operations such as:
+- create/get/list/update/delete entry operations per entry type
+- search/filter functionality
+- row-to-entity mapping
+- repository business rules such as the edited-flag grace period
+
+#### Repository Factory
+- `RepositoryFactory` constructs repositories from adapter + dialect context
+- One concrete repository is enough for now
+- SQLite-specific repositories live under `src/db/repositories/sqlite/`
 
 ## Testing Strategy
 
@@ -93,9 +118,9 @@ Abstract base class must provide:
 4. **Integration scenarios** - end-to-end workflows
 
 ## Further Design Documentation
-- **Data Model Design**: See `docs/design/data_model_design.md` (to be created)
-- **GUI Design**: See `docs/design/gui_design.md` (to be created)
-- **Database Schema**: See `docs/design/database_schema.md` (to be created)
+- Detailed split-out human design documents are not yet created.
+- This root document is currently the human-facing design summary.
+- The AI-maintained database design detail currently lives in `ai_instructions/design/db_design.md` until the human design docs are split further.
 
 ## Open Questions
 - Should communication methods be enumerated or free text?

@@ -3,7 +3,7 @@
 **Read this file first when starting any session on this project.**
 
 ## Project Quick Facts
-- **Name**: EventLog (Radio Communication Event Logger)
+- **Name**: EventLog (Platoon Event Logger)
 - **Type**: Python 3.14 desktop application
 - **Status**: Structure complete, implementation pending
 - **Environment**: Offline only, NO GIT (changes are permanent!)
@@ -11,7 +11,7 @@
 ## Critical Context Files
 
 ### Always Read First
-1. **User Preferences**: `ai_memory/user_preferences.md` - User's preferences, do's and don'ts
+1. **Behavioral Rules**: `ai_memory/behavioral_rules.md` - Critical decision-making rules and workflow constraints
 2. **Latest Session**: `session_logs/session_XXX.md` - What happened in the last session
 
 ### Read When Needed
@@ -22,9 +22,9 @@
 
 ## Session Protocol
 1. Create new session log: `session_logs/session_XXX.md` (increment number)
-2. Read `ai_memory/user_preferences.md` 
+2. Read `ai_memory/behavioral_rules.md`
 3. Check last session log to understand recent work
-4. Update `ai_memory/user_preferences.md` when you learn new preferences
+4. Update the appropriate `ai_memory/*.md` file when you learn new preferences or patterns
 
 ## Key Rules
 - ⚠️ **NO GIT** - Changes are permanent, validate everything
@@ -51,7 +51,7 @@
 |------|------------------------|-------------------------------|
 | Architecture | `ai_instructions/architecture/*.md` | `docs/architecture/root_architecture.md` |
 | Design | `ai_instructions/design/*.md` | `docs/design/root_design.md` |
-| User preferences | `ai_memory/user_preferences.md` | N/A |
+| Behavioral rules / AI memory | `ai_memory/*.md` | N/A |
 | Session history | `session_logs/session_XXX.md` | N/A |
 | Testing (AI) | `ai_instructions/testing.md` | N/A |
 
@@ -62,7 +62,7 @@
 - pytest (testing only)
 
 ## Architecture Pattern
-**GUI (Views + Presenters) → Core (Business Logic) → DB Adapters (Interface) → DB Repositories (SQLite)**
+**GUI (Views + Presenters) → Core (Business Logic) → Repository / Factory Layer → Database Adapter Layer → SQLite dialect implementation**
 
 ---
 

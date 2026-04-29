@@ -44,21 +44,25 @@ GUI Layer (Tkinter)
   ↓ (Views + Presenters)
 Core Layer (Business Logic)
   ↓ (Pure Python, no UI/DB knowledge)
-DB Adapters (Abstract Interface)
-  ↓ (Adapter pattern)
-DB Repositories (SQLite Implementation)
+Repository / Factory Layer
+  ↓ (CRUD workflows + construction)
+Database Adapter Layer
+  ↓ (low-level DB mechanics)
+SQLite Dialect Implementation
 ```
 
 ### Key Patterns
-- **Adapter pattern** - Database abstraction (EventLogAdapter ABC)
-- **Repository pattern** - Data access (SQLiteEventLogRepository)
+- **Adapter pattern** - Low-level database abstraction (`database_adapter.py` + `sqlite_adapter.py`)
+- **Repository pattern** - Application-facing data access (`base_repository.py` + SQLite repositories)
+- **Factory pattern** - Repository construction from adapter + dialect context (`repository_factory.py`)
 - **View-Presenter pattern** - GUI testability (separate UI from logic)
 
 ### Layer Rules
 - NO mixing of concerns
 - GUI doesn't know about database
 - Core doesn't know about GUI or database
-- DB layer implements abstract interfaces
+- Repositories build queries and apply repository business rules
+- Adapters own connection lifecycle, schema initialization, execution/fetch helpers, and transaction primitives
 
 ---
 
@@ -74,6 +78,14 @@ DB Repositories (SQLite Implementation)
 - No server needed (offline requirement)
 - Python stdlib, no dependencies
 - Supports encryption (when needed)
+- Current concrete backend/dialect, with architecture prepared for future backends
+
+### Database Module Direction
+- `src/db/database_adapter.py` - Low-level abstract database contract and database exceptions
+- `src/db/sqlite_adapter.py` - Concrete SQLite adapter for connection, schema, execution, and transactions
+- `src/db/repositories/base_repository.py` - Generic repository base class, dialect-agnostic
+- `src/db/repositories/repository_factory.py` - Constructs repositories from adapter + dialect context
+- `src/db/repositories/sqlite/` - SQLite-specific repositories and future split points
 
 ### Testing: pytest
 - Standard Python testing framework
@@ -188,6 +200,11 @@ DB Repositories (SQLite Implementation)
 - Aggressively subdivided into smaller files
 - Purpose: Efficient token usage - AI reads only what it needs
 - Organized by layer/component (core, db, gui, etc.)
+- `ai_instructions/` belongs with the project and should stay in Git
+
+**AI Memory** (`ai_memory/`):
+- Stores persistent AI-facing project rules, learnings, and preferences
+- `ai_memory/` belongs with the project and should stay in Git
 
 **Human Documentation** (`docs/architecture/`, `docs/design/`):
 - Fewer, larger, comprehensive documents
@@ -207,8 +224,13 @@ DB Repositories (SQLite Implementation)
 - One per AI session
 - Incremental index: session_001.md, session_002.md, etc.
 - Documents what was done, decisions made, learnings
+- Local working notes only; keep `session_logs/` out of Git/deployment
+
+### Local Config Files
+- Keep `config.ini.template` tracked as the example/default shape
+- Keep a machine-specific `config.ini` out of Git/deployment
 
 ---
 
-**Last Updated**: 2026-04-23 (Session 013 - Created during AI memory refactor)
+**Last Updated**: 2026-04-28 (Session 033 - Updated DB architecture facts for adapter/repository pivot)
 

@@ -1,18 +1,20 @@
-"""
-Unit test specific fixtures and configuration.
+"""Unit test specific fixtures and configuration."""
 
-Fixtures defined here are only available to unit tests.
-Use for mocks, stubs, or unit-test-specific test data.
-"""
+from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
+from src.db.repositories.repository_factory import RepositoryFactory
+from src.db.repositories.sqlite.event_log_repository import EventLogRepository
 
-# Example unit test specific fixtures:
 
-# @pytest.fixture
-# def mock_database_adapter():
-#     """Mock database adapter for unit testing business logic."""
-#     # Create mock here
-#     pass
+@pytest.fixture
+def repository() -> Iterator[EventLogRepository]:
+	"""Provide a fresh in-memory repository for each unit test."""
+	repo = cast(EventLogRepository, RepositoryFactory.create_in_memory_repository())
+	try:
+		yield repo
+	finally:
+		repo.close()
 

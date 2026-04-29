@@ -1,7 +1,7 @@
 # Database Design (AI)
 
 **Database Schema & Data Access**  
-**Last Updated**: 2026-04-25 (Session 015 - Added edited flag grace period business rule)
+**Last Updated**: 2026-04-28 (Session 036 - Synced design doc after legacy SQLite repository shell removal)
 
 ## Database Technology
 
@@ -10,7 +10,41 @@ User selects database technology on first launch (stored in `config.ini`).
 
 **Default**: SQLite3 (file-based or in-memory)
 
-**Future options**: Other databases via adapter pattern
+**Future options**: Other databases via the same `DatabaseAdapter` + `RepositoryFactory` architecture
+
+### Persistence Module Layout
+
+Current active structure for the persistence layer:
+
+```text
+src/db/
+├── database_adapter.py
+├── sqlite_adapter.py
+├── repositories/
+│   ├── base_repository.py
+│   ├── repository_factory.py
+│   └── sqlite/
+│       ├── event_log_repository.py
+│       ├── communication_repository.py
+│       ├── event_repository.py
+│       └── personnel_repository.py
+└── schema/
+    ├── schema_executor.py
+    └── sqlite/
+        └── initial_schema.sql
+```
+
+**Design responsibilities**:
+- `database_adapter.py` defines low-level database operations and database-specific exceptions
+- `sqlite_adapter.py` handles SQLite connection lifecycle, schema initialization, execution, fetch helpers, and transaction primitives
+- `repositories/base_repository.py` defines the generic repository base class and stays dialect-agnostic
+- `repositories/repository_factory.py` constructs repositories from adapter + dialect context
+- `repositories/sqlite/event_log_repository.py` is the sole active concrete SQLite repository in runtime use today
+- `repositories/sqlite/` remains the location for SQLite-specific repository implementations and future internal split points
+
+**Current runtime note**:
+- `RepositoryFactory` currently creates `SQLiteAdapter(database_path)` and returns `EventLogRepository(adapter)`
+- The earlier legacy top-level SQLite repository compatibility file has been removed
 
 ### Encryption Support
 - Optional database encryption
@@ -25,7 +59,7 @@ User selects database technology on first launch (stored in `config.ini`).
 Application uses ConfigParser with `config.ini` for global settings.
 
 ### Database Settings
-- `db_type` - Database technology (e.g., "sqlite", "sqlcipher")
+- `db_type` - Database technology / dialect selector (e.g., "sqlite", future encrypted or other backend variants)
 - `db_file_path` - Path to database file (for file-based databases)
 - `db_in_memory` - Use in-memory database (for SQLite, testing)
 - Future: `db_url`, `db_username`, etc. for remote databases
@@ -38,6 +72,8 @@ Application uses ConfigParser with `config.ini` for global settings.
 
 File-based: `eventlog.db` in application directory (or user-configured path)
 In-memory for tests: `:memory:`
+
+This document records the current SQLite dialect design. The adapter/repository architecture is defined in `ai_instructions/architecture/db_architecture.md`; exact storage formats and schema details are defined here.
 
 ## Tables
 
@@ -62,9 +98,10 @@ Stores radio messages, phone calls, written orders, and other communications.
 - `operator` TEXT NOT NULL - Who logged it (person at terminal)
 - `confirmed` INTEGER NOT NULL DEFAULT 0 - Receipt acknowledged (0=false, 1=true)
 - `edited` INTEGER NOT NULL DEFAULT 0 - Entry was modified after save (0=false, 1=true)
-  - **Business Rule**: Only set to 1 if update occurs >5 minutes after `logged_time`
-  - **Rationale**: Allows grace period for immediate typo fixes during active logging
-  - **Implementation**: Repository layer checks time delta before setting flag
+  - **Business Rule**: Only set to 1 if update occurs more than the configured grace period after `logged_time`
+  - **Configuration**: `settings.edited_flag_grace_period_seconds` (default `300`)
+  - **Rationale**: Allows grace period for immediate typo fixes during active logging while keeping the threshold adjustable
+  - **Implementation**: Repository layer reads the setting in seconds and checks the time delta before setting the flag
 
 **System & Method Hierarchy Fields** (nullable - system-centric):
 - `communication_system` TEXT NULL - Communication system/hardware (e.g., "RA180", "RA146", null for "In Person")
@@ -102,9 +139,10 @@ Stores operational events, incidents, status changes, and observations.
 - `priority` TEXT NULL DEFAULT 'Normal' - Priority level ("Low", "Normal", "High", "Critical")
 - `category` TEXT NULL - Event category/type (optional)
 - `edited` INTEGER NOT NULL DEFAULT 0 - Entry was modified after save (0=false, 1=true)
-  - **Business Rule**: Only set to 1 if update occurs >5 minutes after `logged_time`
-  - **Rationale**: Allows grace period for immediate corrections during active logging
-  - **Implementation**: Repository layer checks time delta before setting flag
+  - **Business Rule**: Only set to 1 if update occurs more than the configured grace period after `logged_time`
+  - **Configuration**: `settings.edited_flag_grace_period_seconds` (default `300`)
+  - **Rationale**: Allows grace period for immediate corrections during active logging while keeping the threshold adjustable
+  - **Implementation**: Repository layer reads the setting in seconds and checks the time delta before setting the flag
 
 **Attachments** (stored as references):
 - Handled via separate `file_attachments` and `structured_reports` tables (see below)
@@ -133,9 +171,10 @@ Stores personnel and group tracking - status, location, check-in management.
 - `logged_time` TEXT NOT NULL - When this status was created (ISO 8601 format, auto)
 - `operator` TEXT NOT NULL - Who logged it (person at terminal)
 - `edited` INTEGER NOT NULL DEFAULT 0 - Entry was modified after save (0=false, 1=true)
-  - **Business Rule**: Only set to 1 if update occurs >5 minutes after `logged_time`
-  - **Rationale**: Allows grace period for immediate status corrections during active logging
-  - **Implementation**: Repository layer checks time delta before setting flag
+  - **Business Rule**: Only set to 1 if update occurs more than the configured grace period after `logged_time`
+  - **Configuration**: `settings.edited_flag_grace_period_seconds` (default `300`)
+  - **Rationale**: Allows grace period for immediate status corrections during active logging while keeping the threshold adjustable
+  - **Implementation**: Repository layer reads the setting in seconds and checks the time delta before setting the flag
 
 **Historical Tracking Fields**:
 - `active` INTEGER NOT NULL DEFAULT 1 - Current status (1) or historical (0)
@@ -170,9 +209,10 @@ Stores structured military report templates (7S, 9-liner, etc.) attached to even
 - `logged_time` TEXT NOT NULL - When report was created (ISO 8601 format, auto)
 - `operator` TEXT NOT NULL - Who created this report
 - `edited` INTEGER NOT NULL DEFAULT 0 - Report modified after save (0=false, 1=true)
-  - **Business Rule**: Only set to 1 if update occurs >5 minutes after `logged_time`
-  - **Rationale**: Allows grace period for immediate corrections during active logging
-  - **Implementation**: Repository layer checks time delta before setting flag
+  - **Business Rule**: Only set to 1 if update occurs more than the configured grace period after `logged_time`
+  - **Configuration**: `settings.edited_flag_grace_period_seconds` (default `300`)
+  - **Rationale**: Allows grace period for immediate corrections during active logging while keeping the threshold adjustable
+  - **Implementation**: Repository layer reads the setting in seconds and checks the time delta before setting the flag
 
 **Indexes**:
 - `idx_report_parent_event` ON parent_event_id - Find reports for an event
@@ -366,6 +406,28 @@ key="comm_tab_columns", value='{"visible": ["time", "from", "to", "method", "mes
 key="personnel_color_code_overdue", value="true"
 ```
 
+### settings
+Repository-managed runtime settings.
+
+**Fields**:
+- `key` TEXT PRIMARY KEY - Setting name (e.g., `edited_flag_grace_period_seconds`, `db_migration_level`)
+- `value` TEXT NOT NULL - Setting value stored as text and parsed by the repository/app
+- `description` TEXT NULL - Optional description of the setting
+- `modified_time` TEXT NOT NULL - When the setting was last changed (ISO 8601 format)
+
+**Current default data**:
+```
+key="edited_flag_grace_period_seconds", value="300"
+```
+
+**Purpose**:
+- Repository business-rule configuration
+- Other low-level settings that should exist before user preferences are loaded
+
+**Boundary note**:
+- Repository settings stored here are valid for repository/runtime behavior such as the edited-flag grace period
+- SQLite startup identity/version metadata should not treat this table as the authoritative source; that responsibility belongs to SQLite-specific adapter/bootstrap mechanisms
+
 ## Data Storage Decisions
 
 ### DateTime Storage
@@ -398,6 +460,11 @@ Files stored in filesystem, references in database
 - Allows easy backup of both DB and files
 
 ## Required Operations
+
+**Boundary note**:
+- Repositories define CRUD workflows, query construction, row mapping, and repository business rules
+- The SQLite adapter executes SQL, fetches rows, initializes schema, and owns transaction primitives
+- The repository factory chooses which concrete repository implementation to construct for the active dialect
 
 ### CommunicationEntry Operations
 - CRUD for communication_entries
@@ -488,25 +555,25 @@ migrations/
 
 **New Database**:
 1. Detect no database exists
-2. Run `schema/{db_type}/initial_schema.sql`
-3. Set `db_migration_level` to latest migration number
-4. Set `db_version` and `app_version`
+2. Create the active adapter and let it run `schema/{dialect}/initial_schema.sql`
+3. Stamp required backend-specific identity/version metadata for the new database
+4. Set any non-authoritative support state required by the current runtime
 
 **Existing Database**:
-1. On app startup, check `db_migration_level` from settings table
+1. On app startup, adapter checks authoritative backend-specific identity/version metadata
 2. Find all migrations > current level
 3. For each migration (in order):
-   - Execute SQL file for current DB type
+   - Execute SQL file for current dialect
    - Execute Python migration script if present
-   - Update `db_migration_level`
-4. Update `db_version` and `app_version` as needed
+   - Update backend-specific migration/version state as needed
+4. Update any supporting runtime metadata as needed
 
 ### Versioning
 - **app_version**: Application code version (major.minor.patch)
 - **db_version**: Database schema version (major.minor.patch)
 - **db_migration_level**: Latest applied migration number (e.g., "003")
 
-Stored in `settings` table for runtime access.
+For SQLite, the architecture direction is to treat adapter-managed backend metadata (for example `PRAGMA application_id` and `PRAGMA user_version`) as authoritative. If mirrored runtime values are stored elsewhere, they are supportive rather than authoritative.
 
 ### Migration Cleanup
 When releasing new version, old migrations can be removed:

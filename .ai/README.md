@@ -12,7 +12,7 @@ This is the **main file** that AI assistants should automatically read when star
 1. **AI reads `.ai/instructions.md` first** (on session start)
 2. This file tells the AI:
    - What the project is
-   - What files to read always (user preferences, last session)
+   - What files to read always (behavioral rules, last session)
    - What files to read when needed (architecture, design, testing)
    - Key rules and constraints
 
@@ -51,10 +51,11 @@ EventLog/
 ├── .ai/
 │   └── instructions.md          ← MAIN AI ENTRY POINT (auto-load this)
 ├── ai_instructions/
-│   ├── README.md               ← Legacy, read when needed
+│   ├── README.md               ← Index for AI instruction files
 │   └── testing.md              ← Read when writing tests
 ├── ai_memory/
-│   └── user_preferences.md     ← Read every session (per instructions.md)
+│   ├── behavioral_rules.md     ← Read every session (per instructions.md)
+│   └── project_facts.md        ← Read when technical context is needed
 ├── session_logs/
 │   └── session_XXX.md          ← Read latest session (per instructions.md)
 └── docs/                        ← Read when needed for context
@@ -64,7 +65,7 @@ EventLog/
 
 1. **Automatically reads**: `.ai/instructions.md`
 2. **Then follows instructions to read**:
-   - `ai_memory/user_preferences.md`
+   - `ai_memory/behavioral_rules.md`
    - Latest `session_logs/session_XXX.md`
 3. **Creates new**: `session_logs/session_XXX.md` for this session
 4. **Reads on-demand**: Architecture, design, testing docs as needed

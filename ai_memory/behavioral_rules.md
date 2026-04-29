@@ -136,6 +136,8 @@
 - Follow decision tree above
 - When in doubt, ASK
 - Log significant decisions in session log
+- Update the session log continuously during the session when meaningful progress happens, not only at the end
+- Reason: crashes can happen, so progress should be recorded as it happens
 
 **At end of session**:
 - Update session log with summary

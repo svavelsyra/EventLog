@@ -12,16 +12,16 @@ This application allows staff to log:
 ## Technology
 - **Python**: 3.14
 - **GUI**: Tkinter
-- **Database**: SQLite3 (local file)
+- **Database**: SQLite3 currently (architecture prepared for future backends)
 - **Testing**: pytest
 
 ## Project Structure
 ```
-MessageLog/
+EventLog/
 ├── src/              # Source code
 │   ├── gui/          # GUI layer (Views + Presenters)
 │   ├── core/         # Business logic
-│   └── db/           # Database layer (Adapters + Repositories)
+│   └── db/           # Database layer (DatabaseAdapter + SQLiteAdapter + Repositories)
 ├── tests/            # Test suite
 │   ├── conftest.py   # Global test fixtures (pytest)
 │   ├── unit/         # Unit tests
@@ -31,6 +31,13 @@ MessageLog/
 ├── ai_memory/        # AI learnings and preferences
 └── session_logs/     # AI session history
 ```
+
+Current database direction under `src/db/`:
+- `database_adapter.py` - low-level database adapter contract and DB exceptions
+- `sqlite_adapter.py` - SQLite implementation of low-level DB behavior
+- `repositories/base_repository.py` - generic repository base class
+- `repositories/repository_factory.py` - repository construction from adapter + dialect context
+- `repositories/sqlite/` - SQLite-specific repositories
 
 ## Setup
 

@@ -35,7 +35,8 @@
 ## AI Memory & Learning
 
 Located in `../ai_memory/`:
-- **`user_preferences.md`** - **READ EVERY SESSION** - Critical user preferences
+- **`behavioral_rules.md`** - **READ EVERY SESSION** - Critical decision-making and workflow rules
+- **`project_facts.md`** - Technical project facts, stack, architecture, constraints
 - **`gui_learnings.md`** - GUI implementation patterns learned
 - **`core_learnings.md`** - Core business logic patterns learned
 - **`db_learnings.md`** - Database patterns learned
@@ -68,7 +69,7 @@ Located in `../Demo/`:
 
 ## Reading Strategy
 
-1. **Every session start**: Read `ai_memory/user_preferences.md`
+1. **Every session start**: Read `ai_memory/behavioral_rules.md`
 2. **Check context**: Read latest `session_logs/session_XXX.md`
 3. **General understanding**: Read `project_context.md` if new to project
 4. **User stories**: Read `user_stories.md` when creating/implementing stories
