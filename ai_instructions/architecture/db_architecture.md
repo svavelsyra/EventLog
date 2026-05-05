@@ -368,11 +368,12 @@ repository = EventLogRepository(adapter)
 - `structured_reports` - 7S, 9-liner, etc. (foreign key to `event_entries`)
 
 ### Configuration Tables
-- `communication_systems` - RA180, RA146, email systems, etc.
-- `system_capabilities_config` - What capabilities each system supports
-- `channel_designations` - Channel numbers and human-readable names per system
+- `communication_systems` - Top-level communication ways/systems such as RA180, Motorola, Rakel, Courier
+- `communication_options` - Recursive configured child options beneath each top-level system
+- `communication_qualifiers_config` - Top-level qualifier definitions/behavior per system
 - `report_templates` - 7S template, 9-liner template, etc.
 - `categories` - Event categories
+- `priorities` or equivalent runtime-source table - Valid event priorities if priority configuration is database-backed
 - `settings` - Repository/runtime settings and migration metadata
 - `user_preferences` - Last operator, column configs, etc.
 
@@ -381,9 +382,9 @@ repository = EventLogRepository(adapter)
 
 ### Indexes
 - Chronological queries: `event_time`, `logged_time`
-- Filtering: `operator`, `priority`, `category`, `communication_system`, `method_type`
+- Filtering: `operator`, `priority`, `category`, `communication_system`
 - Personnel queries: `who`, `active`, `last_contact_time`, `alarm_enabled`
-- Relationships: `parent_event_id`, `communication_system_id`
+- Relationships: `parent_event_id`, `communication_system_id`, `parent_option_id`
 
 ## Repository Implementation Notes
 
@@ -452,7 +453,9 @@ class EventLogRepository(BaseRepository):
             id=row["id"],
             message_content=row["message_content"],
             from_field=row["from_field"],
-            system_capabilities=json.loads(row["system_capabilities"]) if row["system_capabilities"] else None,
+            communication_system=row["communication_system"],
+            communication_path=json.loads(row["communication_path"]) if row["communication_path"] else None,
+            communication_qualifiers=json.loads(row["communication_qualifiers"]) if row["communication_qualifiers"] else None,
             event_time=datetime.fromisoformat(row["event_time"]) if row["event_time"] else None,
         )
 ```
@@ -472,9 +475,9 @@ def get_all_communication_entries(self, filters: dict | None = None) -> list[Com
         if "operator" in filters:
             query += " AND operator = ?"
             params.append(filters["operator"])
-        if "method_type" in filters:
-            query += " AND method_type = ?"
-            params.append(filters["method_type"])
+        if "communication_system" in filters:
+            query += " AND communication_system = ?"
+            params.append(filters["communication_system"])
 
     query += " ORDER BY event_time DESC"
     rows = self._adapter.fetch(query, tuple(params))

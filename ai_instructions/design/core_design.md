@@ -1,7 +1,7 @@
 # Core Design (AI)
 
 **Domain Models & Business Logic**  
-**Last Updated**: 2026-04-18
+**Last Updated**: 2026-05-05
 
 ## Overview
 
@@ -59,135 +59,91 @@ Domain entity representing radio/phone/in-person communications and written orde
 - Free text entry
 - **Reasoning**: Better empty than "alla" garbage data
 
-#### Communication System & Method (System-Centric Hierarchy)
+#### Communication Selection Path & Top-Level Qualifiers
 
-**Design Philosophy - System-Centric**:
-- **Primary**: Communication System (the actual hardware/platform)
-- **Secondary**: Method (how the system was used)
-- **Tertiary**: Channel/Designation (if applicable)
-- **Quaternary**: System capabilities (metadata)
-- **Reasoning**: Military communication systems (RA180, RA146, etc.) can support multiple methods (radio, phone, data/fax). System is the primary organizational unit.
+**Design Philosophy - Neutral Tier Model**:
+- Communication entries should no longer assume one universal radio-shaped hierarchy such as system → method → channel.
+- The underlying selection structure may be recursive beneath the chosen communication system/way.
+- The current operator-facing UI may still render the first few visible levels as `tier_1` / `tier_2` / `tier_3`, but that is a practical UI limit rather than a fixed domain-storage limit.
+- This keeps the operator-facing experience stable while allowing the underlying structure to grow later without redesigning the model.
 
 **communication_system** (str, nullable)
-- Which communication system/platform was used
-- Optional (null for simple methods like "In Person")
+- Base communication way/system used for this entry
+- Usually the first and most important operator selection
 - Examples:
-  - "RA180", "RA146", "RA640" (Swedish military radio systems)
-  - "Email Server", "Slack Workspace", "Field Phone Network"
-- **Historical storage**: Logs which system was used at time of communication
-- Phase 1: Hardcoded systems for your unit (RA180, RA146, etc.)
-- Phase 2+: User-configurable system list
+  - `RA180`
+  - `Motorola`
+  - `Rakel`
+  - `Courier`
+  - `Spoken Word`
+- **Historical storage**: The chosen base way/system must remain readable even if configuration changes later
 
-**method_type** (str, nullable)
-- How the system was used / transmission method
-- Optional (defaults to system's primary method if not specified)
-- Values depend on system capabilities:
-  - RA180 system: "Radio", "Phone", "Data" (system can do all three)
-  - Email system: "Email"
-  - Slack: "Chat"
-  - No system: "In Person", "Ordnance" (written orders), "Other"
-- **Configuration-driven**: Each system defines which methods it supports
-- **Reasoning**: Some systems support multiple methods; method describes how system was used this time
+**communication_path** (list/JSON, nullable)
+- Ordered list of selected option nodes beneath the top-level communication system
+- Each step records the operator-visible choice that was actually used at that time
+- Example shapes:
+  - `[ {"value": "2", "label": "Channel 2"} ]`
+  - `[ {"value": "5", "label": "Company Net"}, {"value": "ALT", "label": "Alternate Route"} ]`
+- Phase 1 may commonly use shallow paths even though the structure is allowed to be recursive
+- **Historical storage**: The stored path should preserve what was selected even if later configuration labels or child options change
 
-**method_channel** (str, nullable)
-- Technical channel/identifier (if method supports channels)
-- Examples:
-  - Radio: "5", "7" (channel number)
-  - Slack: Channel ID
-  - Email: Distribution list name
-- Only populated if method type supports channels (e.g., Radio does, Phone might not)
+**Qualifier Model**:
+- Some important communication properties should sit above the tier path as top-level qualifiers
+- Phase 1 discussion currently centers on:
+  - `encrypted` / `clear`
+  - possibly `data` as a simple on/off operational qualifier for systems such as RA180
+- Qualifiers are configuration-driven and can be overridden per system as:
+  - selectable
+  - forced to true
+  - forced to false
+  - hidden / not operator-editable
 
-**channel_designation** (str, nullable)
-- Human-readable channel name/designation
-- Only populated if method type supports channels
-- Examples:
-  - Radio: "Company Net", "Platoon 2 Net"
-  - Slack: "#operations", "#logistics"
-  - Email: "Command Distribution"
-- **Historical storage**: Even if designation changes, old logs show what it was when logged
-
-**Hierarchy Examples**:
-- **RA180 via radio**: communication_system="RA180", method_type="Radio", method_channel="5", channel_designation="Company Net"
-- **RA180 via phone**: communication_system="RA180", method_type="Phone", method_channel=null, channel_designation=null
-- **RA180 via data/fax**: communication_system="RA180", method_type="Data", method_channel=null, channel_designation=null
-- **In person**: communication_system=null, method_type="In Person", method_channel=null, channel_designation=null
-- **Written order**: communication_system=null, method_type="Ordnance", method_channel=null, channel_designation=null
-
-**system_capabilities** (dict/JSON, nullable)
-- System-specific features and options
-- Optional
+**communication_qualifiers** (dict/JSON, nullable)
+- Stores the chosen top-level qualifier values for the entry
+- Optional, but expected for systems that expose meaningful qualifiers
 - Stored as JSON in database
-- Structure varies by communication_system
-- **User values stored** (what the operator selected):
-  - RA180: `{"transmission_mode": "DART", "encryption": true, "priority": "immediate"}`
-  - Email: `{"priority": "high", "read_receipt": false}`
-- **Configuration defines valid structure** (separate, not stored in each entry):
-  - Which capability keys exist for this system
-  - Data type (enum, boolean, text)
-  - Valid values for enums
-  - Default values
-  - Label (for UI display)
-  - **UI control inferred from type**: enum→dropdown, boolean→checkbox, text→textfield
-- **Reasoning**: System capabilities (encryption, DART vs Speech) are tied to the system hardware, not just the method
+- Example shapes:
+  - RA180 common setup: `{"encrypted": true, "data": true}`
+  - Motorola: `{"encrypted": false}`
+  - Rakel: `{"encrypted": true}`
+- **Historical storage**: The stored qualifier values should preserve what the operator logged at that time even if later system defaults or visibility rules change
 
-#### Method Metadata Configuration (Settings):
+**Selection Examples**:
+- **RA180 common practical setup**: `communication_system="RA180"`, `communication_path=[{"value": "2", "label": "Channel 2"}]`, `communication_qualifiers={"encrypted": true, "data": true}`
+- **Motorola clear radio**: `communication_system="Motorola"`, `communication_path=[{"value": "A", "label": "Channel A"}]`, `communication_qualifiers={"encrypted": false}`
+- **Rakel simplified Phase 1**: `communication_system="Rakel"`, `communication_path=[{"value": "X", "label": "Channel X"}]`, `communication_qualifiers={"encrypted": true}`
+- **Courier**: `communication_system="Courier"`, `communication_path=[]`, qualifier visibility defined by configuration for that system
 
-**Phase 1 - Hardcoded Defaults**:
-- Hardcode metadata configuration in database seed data
-- Radio metadata configuration example:
-  ```json
-  {
-    "transmission_mode": {
-      "label": "Transmissionsläge",
-      "type": "enum",
-      "values": ["DART", "Speech"],
-      "default": "Speech"
-    },
-    "encryption": {
-      "label": "Kryptering",
-      "type": "boolean",
-      "default": false
-    }
-  }
-  ```
-- **UI control inference**:
-  - `type: "enum"` + `values: [...]` → Dropdown widget
-  - `type: "boolean"` → Checkbox widget
-  - `type: "text"` → Text field widget
-- **Default handling**:
-  - Enum: `default` must be one of the values (or null for empty)
-  - Boolean: `default` is `true` or `false`
-  - Text: `default` is a string like `""` or `"Foobar"`
-- Configuration tells GUI: what control to render, valid values, defaults
-- User selection stored in entry's `method_metadata` field: `{"transmission_mode": "DART", "encryption": true}`
-- No UI to edit metadata configuration yet
-- Sufficient for most operations (same setup each time)
+#### Communication Configuration Rules (Settings)
 
-**Phase 2 - Preset Templates**:
-- Pre-configured metadata setups (templates) stored in database
-- Examples:
-  - "Standard Radio Setup" (DART/Speech + encryption)
-  - "Field Operations Radio" (DART/Speech + encryption + additional field)
-  - "Training Exercise Radio" (Speech only, no encryption)
-- User selects template during mission setup
-- Most common use case: Select same template every time
+**Phase 1 - Hardcoded/Seeded Defaults**:
+- Seed configuration should define, per system:
+  - child labels for the next visible selection level where needed
+  - recursive option nodes beneath the system
+  - which top-level qualifiers exist for that system
+  - whether each qualifier is selectable, forced, or hidden
+- This allows the GUI to render the configured communication shape dynamically without inventing local per-system logic.
+- The current GUI may stop after three visible dropdown levels for practical reasons, but the underlying structure should not require redesign if a deeper configured path is approved later.
 
-**Phase 3 - Custom Configuration** (Future):
-- UI to create/edit metadata configuration
-- Per method type configuration:
-  - Add/remove metadata keys
-  - Define data type (enum, boolean, text)
-  - Define valid values for enums
-  - Set defaults
-- Save as custom template for reuse
+**Phase 1 anchor examples**:
+- **RA180**:
+  - uses channels
+  - exposes top-level `encrypted`
+  - likely exposes top-level `data`
+  - real-world channel restrictions on voice/data remain domain context, not mandatory app enforcement in Phase 1
+- **Motorola**:
+  - uses channels
+  - `encrypted` forced false / clear
+- **Rakel**:
+  - uses channels
+  - simplified to `encrypted` forced true in Phase 1
+- **Courier**:
+  - non-radio example included to prove the shared model is not radio-only
+  - lower tiers may be unused in Phase 1
 
-
-**Phase 1 Implementation Notes**:
-- Hardcode in database schema/seed data:
-  - Radio method metadata configuration (transmission_mode, encryption)
-  - Other methods: no metadata (for now)
-- Code reads configuration to render UI controls dynamically
-- Future phases add templates and custom editing without code changes
+**Future Development**:
+- Later stories may allow richer per-path qualifiers, more complex selector types, or deeper enforcement rules if operational value justifies them.
+- The current design should stay open for that growth without forcing Phase 1 to solve every real-world nuance immediately.
 
 #### Status & Metadata
 
@@ -233,34 +189,20 @@ Domain entity representing radio/phone/in-person communications and written orde
 **Optional Field Validation** (can be empty/null):
 - `from_field`: If provided, reasonable length
 - `to_field`: If provided, reasonable length
-- `method_type`: Defaults to "Other" if not provided
 
-**System/Method Hierarchy Validation** (conditional):
-- Configuration defines which systems support which methods and capabilities
-- **Phase 1 - Radio systems (RA180, RA146)**:
-  - If `communication_system` is set (e.g., "RA180"):
-    - `method_type` should be from system's supported methods (Radio, Phone, Data for RA180)
-    - `system_capabilities` validated against system's capability configuration
-  - If `method_type` = "Radio" (regardless of system):
-    - `method_channel` must be set (from configured channels)
-    - `channel_designation` must be set (from configured designations for that channel)
-  - If `method_type` in ["Phone", "Data", "In Person", "Ordnance", "Other"]:
-    - `method_channel`, `channel_designation` must be null/empty (these methods don't use channels)
-  - If no `communication_system` (simple methods):
-    - `method_type` should be "In Person", "Ordnance", or "Other"
-    - No system capabilities
-    
-- **Phase 2+ - Additional systems**:
-  - Each system can define its supported methods
-  - Each system can define its capabilities (encryption, transmission modes, etc.)
-  - Configuration-driven: system → supported methods → valid capabilities mapping
+**Selection Path Validation** (conditional):
+- Configuration defines the recursive option tree beneath each communication system.
+- `communication_system` should be one configured communication way/system.
+- Each step in `communication_path` should correspond to a valid child option under the previously selected parent context.
+- The current UI/runtime may enforce a practical visible depth limit, but the underlying validation should be based on configured parent/child relationships rather than a permanently fixed three-field schema.
+- The core layer should validate structural fit against configuration, but Phase 1 should **not** try to enforce every real-world operational restriction such as all voice/data permissions per channel.
 
-**System Capabilities Validation**:
-- Must be valid JSON if present
-- Structure defined by communication_system configuration
-- **Phase 1**: RA180 capabilities: transmission_mode (DART/Speech), encryption (bool)
-- GUI provides appropriate controls based on capability type
-- Phase 2+: Stricter validation per system type if needed
+**Qualifier Validation**:
+- `communication_qualifiers` must be valid JSON if present.
+- Only qualifiers defined for the selected system should be accepted.
+- If a qualifier is forced by the system configuration, the stored value should match the forced value.
+- Hidden/uneditable qualifiers may still be stored with their configured forced value if later filtering/reporting depends on them.
+- Phase 1 should keep qualifiers simple and boolean-like where practical.
 
 **Length Limit Handling**:
 - When `message_content` exceeds 5000 characters:
@@ -278,7 +220,7 @@ Domain entity representing radio/phone/in-person communications and written orde
 - `logged_time`: Set to now() if not provided
 - `operator`: Prefill with last operator used
 - `confirmed`: Default to False
-- `method_type`: Default to "Other" if not specified
+- System-defined forced qualifiers may be auto-filled even when not shown in the GUI
 
 ### Entity Creation
 
@@ -858,64 +800,89 @@ This document focuses on WHAT fields exist and their validation rules.
 
 ### CommunicationEntryValidator
 ```python
+from datetime import datetime
+
 class CommunicationEntryValidator:
     @staticmethod
-    def validate_event_time(dt: datetime) -> None
+    def validate_event_time(dt: datetime) -> None:
+        ...
     
     @staticmethod
-    def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None
+    def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None:
+        ...
     
     @staticmethod
-    def validate_method_hierarchy(method_type: str, method_system: str | None, 
-                                   method_channel: str | None, channel_designation: str | None) -> None
+    def validate_selection_path(communication_system: str | None,
+                                communication_path: list[dict] | None,
+                                config: object,
+                                max_recursion_depth: int) -> None:
+        ...
     
     @staticmethod
-    def validate_method_metadata(method_type: str, metadata: dict | None) -> None
+    def validate_qualifiers(tier_1_value: str | None,
+                            qualifiers: dict | None,
+                            config: object) -> None:
+        ...
 ```
 
 ### EventEntryValidator
 ```python
+from datetime import datetime
+
 class EventEntryValidator:
     @staticmethod
-    def validate_event_time(dt: datetime) -> None
+    def validate_event_time(dt: datetime) -> None:
+        ...
     
     @staticmethod
-    def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None
+    def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None:
+        ...
     
     @staticmethod
-    def validate_priority(priority: str) -> None
+    def validate_priority(priority: str) -> None:
+        ...
     
     @staticmethod
-    def validate_category(category: str | None) -> None
+    def validate_category(category: str | None) -> None:
+        ...
 ```
 
 ### PersonnelEntryValidator
 ```python
+from datetime import datetime
+
 class PersonnelEntryValidator:
     @staticmethod
-    def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None
+    def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None:
+        ...
     
     @staticmethod
-    def validate_alarm_fields(alarm_enabled: bool, expected_checkin_time: datetime | None) -> None
+    def validate_alarm_fields(alarm_enabled: bool, expected_checkin_time: datetime | None) -> None:
+        ...
     
     @staticmethod
-    def validate_supersedes(supersedes: str | None) -> None
+    def validate_supersedes(supersedes: str | None) -> None:
+        ...
 ```
 
 ### StructuredReportValidator
 ```python
 class StructuredReportValidator:
     @staticmethod
-    def validate_parent_event_id(event_id: int) -> None
+    def validate_parent_event_id(event_id: int) -> None:
+        ...
     
     @staticmethod
-    def validate_report_type(report_type: str) -> None
+    def validate_report_type(report_type: str) -> None:
+        ...
     
     @staticmethod
-    def validate_report_data(report_type: str, report_data: dict) -> None
+    def validate_report_data(report_type: str, report_data: dict) -> None:
+        ...
     
     @staticmethod
-    def validate_7s_report_data(data: dict) -> None
+    def validate_7s_report_data(data: dict) -> None:
+        ...
 ```
 
 **Common Behavior**:

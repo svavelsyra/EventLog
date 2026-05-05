@@ -83,22 +83,31 @@ Domain entity representing structured military report formats (7S, 9-liner, etc.
 
 **Example Structure**:
 ```python
+from datetime import datetime
+
+
+class SystemConfig:
+    ...
+
+
 class CommunicationEntryValidator:
     @staticmethod
     def validate_event_time(dt: datetime) -> None:
         # Business rule: cannot be in future
-        
+        ...
+
     @staticmethod
     def validate_required_field(value: str, field_name: str, max_length: int | None = None) -> None:
         # Business rule: non-empty, max length
-        
+        ...
+
     @staticmethod
-    def validate_system_method_hierarchy(communication_system: str | None, 
-                                         method_type: str | None,
-                                         method_channel: str | None,
-                                         channel_designation: str | None,
+    def validate_communication_selection(communication_system: str | None,
+                                         communication_path: list[dict] | None,
+                                         communication_qualifiers: dict | None,
                                          config: SystemConfig) -> None:
-        # Business rule: system defines supported methods, channels required for Radio
+        # Business rule: system, recursive path, and qualifiers must fit configured rules
+        ...
 ```
 
 ### Configuration-Driven Validation
@@ -106,15 +115,35 @@ class CommunicationEntryValidator:
 **Pattern**: Validators accept configuration objects to validate against dynamic rules.
 
 **Configuration Sources** (loaded from database):
-- `SystemConfig`: Which systems exist, supported methods, capabilities
+- `SystemConfig`: Which communication systems/ways exist, which recursive options exist beneath them, and which top-level qualifiers/capabilities apply
 - `ReportTemplateConfig`: Which report types exist, required/optional fields
 - `CategoryConfig`: Valid categories for events
 - `PriorityConfig`: Valid priorities for events
 
-**Rationale**: Business rules depend on user-configured data (e.g., "RA180 supports Radio/Phone/Data"). Validators validate against current configuration state.
+**Rationale**: Business rules depend on user-configured data (e.g., which communication systems exist, which configured paths/options are available beneath a system, and whether qualifiers such as `encrypted` are selectable, forced, or hidden). Validators validate against current configuration state.
 
 **Example**:
 ```python
+class ValidationError(Exception):
+    ...
+
+
+class CapabilityDefinition:
+    def __init__(self, field_type: str, valid_values: list[str]) -> None:
+        self.field_type = field_type
+        self.valid_values = valid_values
+
+
+class SystemDefinition:
+    def get_capability(self, key: str) -> CapabilityDefinition:
+        return CapabilityDefinition("enum", [])
+
+
+class SystemConfig:
+    def get_system(self, system_name: str) -> SystemDefinition:
+        return SystemDefinition()
+
+
 # Validator receives configuration
 def validate_system_capabilities(system_name: str, 
                                  capabilities: dict,
@@ -135,6 +164,26 @@ def validate_system_capabilities(system_name: str,
 
 **Creation**:
 ```python
+class CommunicationEntry:
+    def __init__(self, message_content: str, from_field: str) -> None:
+        self.message_content = message_content
+        self.from_field = from_field
+
+
+class CommunicationEntryValidator:
+    @staticmethod
+    def validate_all(entry: CommunicationEntry, config: object) -> None:
+        ...
+
+
+class Repository:
+    def create(self, entry: CommunicationEntry) -> None:
+        ...
+
+
+config = object()
+repository = Repository()
+
 # Presenters create entities directly
 entry = CommunicationEntry(
     message_content="...",
@@ -158,11 +207,26 @@ repository.create(entry)
 
 **Example**:
 ```python
+class SystemConfig:
+    ...
+
+
+class CommunicationEntry:
+    def __init__(self) -> None:
+        ...
+
+
+class CommunicationEntryValidator:
+    @staticmethod
+    def validate_all(entry: CommunicationEntry, config: SystemConfig) -> None:
+        ...
+
+
 class CommunicationEntryFactory:
     @staticmethod
     def create_from_user_input(data: dict, config: SystemConfig) -> CommunicationEntry:
         # Apply defaults, derive fields, validate
-        entry = CommunicationEntry(...)
+        entry = CommunicationEntry()
         CommunicationEntryValidator.validate_all(entry, config)
         return entry
 ```
@@ -197,29 +261,31 @@ class CommunicationEntryFactory:
 - from_field, to_field (CommunicationEntry)
 - whom (EventEntry)
 - status, location (PersonnelEntry)
-- system/method/channel (CommunicationEntry - defaults to "Other")
+- communication system / path / qualifiers (CommunicationEntry - may be empty when not captured, but should come from runtime config when used)
 
 **Rationale**: Fast operational tempo - capture what you have, fill details later during review.
 
-### System-Centric Hierarchy Validation
+### Communication Configuration Validation Ownership
 
-**Business Rule**: Communication system defines supported methods and capabilities.
+**Business Rule**: Communication meaning is owned by configuration, not by hardcoded radio-shaped assumptions.
 
 **Validation Flow** (Configuration-Driven):
 1. If `communication_system` is set (e.g., "RA180"):
-   - `method_type` must be in system's supported_methods (from config)
-   - `system_capabilities` keys must match system's capability_config (from config)
-2. If `method_type` is set AND configuration defines that method supports channels:
-   - `method_channel` and `channel_designation` should be set (warning if missing)
-   - Example: Radio systems typically use channels, Slack uses channels, Phone does not
-3. If method does NOT support channels (per config):
-   - `method_channel` and `channel_designation` must be null/empty
+   - the system must exist in runtime configuration
+   - top-level qualifier values must match the qualifier rules configured for that system
+2. If a recursive `communication_path` is present:
+   - each selected step must correspond to a valid configured option beneath the chosen system or parent option
+   - ordering/parent-child meaning comes from configuration, not from hardcoded tier semantics
+3. If the selected system exposes no child options:
+   - the path may be empty
+4. If qualifier behavior is forced or hidden by configuration:
+   - caller-provided values must be normalized or rejected according to the runtime contract
 
 **Configuration Integration**: 
 - Validators accept `SystemConfig` to check current system definitions
-- Channel support determined by configuration, NOT hardcoded by method name
-- Each system can define which of its methods use channels
-- Example: RA180 Radio method uses channels, RA180 Phone method does not
+- Visible child selections are determined by configured recursive options, not by hardcoded `method` or `channel` fields
+- Top-level qualifier behavior is determined by configuration, not by presenter-local assumptions
+- The GUI may present only a bounded number of visible selection controls, but Core should treat the underlying structure as a configured path rather than a permanently fixed hierarchy
 
 **See**: `ai_instructions/design/core_design.md` for complete validation rules.
 
@@ -251,7 +317,7 @@ class CommunicationEntryFactory:
 **Pattern**: Configuration objects loaded from database, passed to validators and presenters.
 
 **Configuration Types**:
-- `SystemConfig`: Communication systems, supported methods, capabilities
+- `SystemConfig`: Communication systems/ways, recursive option structures, qualifier behavior
 - `ReportTemplateConfig`: Structured report templates, field definitions, summary formats
 - `CategoryConfig`: Valid event categories
 - `PriorityConfig`: Valid event priorities
@@ -260,7 +326,7 @@ class CommunicationEntryFactory:
 
 **Caching**: Configuration cached in memory (reloaded on settings change).
 
-**Usage**: Presenters fetch configuration, pass to validators and UI builders.
+**Usage**: Presenters fetch configuration, pass to validators and UI builders. Core remains responsible for interpreting the configured communication path and qualifier rules; GUI should render from config without inventing communication semantics locally.
 
 ## Dependencies
 - **None** - Core layer has no dependencies on other application layers

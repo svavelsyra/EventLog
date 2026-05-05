@@ -1,7 +1,7 @@
 # Database Design (AI)
 
 **Database Schema & Data Access**  
-**Last Updated**: 2026-04-28 (Session 036 - Synced design doc after legacy SQLite repository shell removal)
+**Last Updated**: 2026-05-05 (Session 081 - Synced communication-config storage model to refined Epic 003 design)
 
 ## Database Technology
 
@@ -103,12 +103,17 @@ Stores radio messages, phone calls, written orders, and other communications.
   - **Rationale**: Allows grace period for immediate typo fixes during active logging while keeping the threshold adjustable
   - **Implementation**: Repository layer reads the setting in seconds and checks the time delta before setting the flag
 
-**System & Method Hierarchy Fields** (nullable - system-centric):
-- `communication_system` TEXT NULL - Communication system/hardware (e.g., "RA180", "RA146", null for "In Person")
-- `method_type` TEXT NULL - How system was used (e.g., "Radio", "Phone", "Data" for RA180; "In Person", "Ordnance" for no system)
-- `method_channel` TEXT NULL - Technical channel identifier (e.g., "5" for radio channel, only if method supports channels)
-- `channel_designation` TEXT NULL - Human-readable channel name (e.g., "Company Net", only if method supports channels)
-- `system_capabilities` TEXT NULL - JSON dict with system-specific options (e.g., `{"transmission_mode": "DART", "encryption": true}` for RA180)
+**Communication Selection Snapshot Fields**:
+- `communication_system` TEXT NULL - Selected top-level communication way/system snapshot (e.g., "RA180", "Motorola", "Courier")
+- `communication_path` TEXT NULL - JSON array describing the selected recursive option path beneath the top-level system
+  - Example: `[ {"value": "5", "label": "Company Net"} ]`
+  - Deeper future example: `[ {"value": "5", "label": "Company Net"}, {"value": "DATA", "label": "Data Route"} ]`
+- `communication_qualifiers` TEXT NULL - JSON dict with chosen top-level qualifier values (e.g., `{"encrypted": true, "data": true}`)
+
+**Recursive structure note**:
+- The underlying configuration model may be recursive / tree-shaped beneath the top-level communication system.
+- The current operator-facing UI may still stop at three visible levels for practical use, but that is a UI/runtime limit rather than a storage-limit assumption.
+- If a future fourth visible level is needed, the recursive storage shape should already support it without redesigning the schema.
 
 **Attachments** (stored as references):
 - Handled via separate `file_attachments` and `structured_reports` tables (see below)
@@ -118,13 +123,12 @@ Stores radio messages, phone calls, written orders, and other communications.
 - `idx_comm_logged_time` ON logged_time - Recent entries
 - `idx_comm_operator` ON operator - Filtering by operator
 - `idx_comm_system` ON communication_system - Filtering by system
-- `idx_comm_method_type` ON method_type - Filtering by method
 
 **Constraints**:
 - `message_content` cannot be empty string (CHECK constraint)
 - `event_time` cannot be in future (app validation, not DB constraint - allows late logging)
-- System/method relationship validated by app (each system defines supported methods)
-- If `method_type` = "Radio", then method_channel and channel_designation should be set (app validation)
+- `communication_path` and `communication_qualifiers` must be valid JSON if present (app validation)
+- Selected system/path/qualifier relationship validated by app/core against the configuration tree and qualifier definitions
 
 ### event_entries
 Stores operational events, incidents, status changes, and observations.
@@ -224,21 +228,29 @@ Stores structured military report templates (7S, 9-liner, etc.) attached to even
 - `report_type` must be from configured templates (app validation)
 
 ### communication_systems
-Stores configured communication systems (RA180, RA146, Email, Slack, etc.) and their supported methods/capabilities.
+Stores configured communication ways/systems and their top-level shared behavior.
+
+**Child linkage rule**:
+- A system row does **not** store a denormalized list of child IDs.
+- Its immediate child options are the `communication_options` rows where:
+  - `communication_system_id = communication_systems.id`
+  - `parent_option_id IS NULL`
+- This keeps one source of truth for the tree instead of duplicating child references on the parent.
 
 **Fields**:
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT - Unique identifier
-- `system_name` TEXT NOT NULL UNIQUE - System name (e.g., "RA180", "RA146", "Email Server")
-- `system_type` TEXT NOT NULL - Category/type of system (e.g., "Radio System", "Email", "Chat")
-- `supported_methods` TEXT NOT NULL - JSON array of methods this system supports (e.g., `["Radio", "Phone", "Data"]` for RA180)
-- `primary_method` TEXT NULL - Default method when this system is selected (e.g., "Radio" for RA180)
+- `system_name` TEXT NOT NULL UNIQUE - System/way name (e.g., "RA180", "Motorola", "Rakel", "Courier")
+- `system_type` TEXT NOT NULL - Category/type of system (e.g., "Radio System", "Courier", "In Person")
+- `child_label` TEXT NULL - Label for the next visible selection level beneath this system (e.g., "Channel")
 - `sort_order` INTEGER - Display order in UI
 - `is_active` INTEGER NOT NULL DEFAULT 1 - Soft delete flag (0=inactive, 1=active)
 
 **Default data** (Phase 1 - for your unit):
 ```
-system_name="RA180", system_type="Radio System", supported_methods='["Radio", "Phone", "Data"]', primary_method="Radio"
-system_name="RA146", system_type="Radio System", supported_methods='["Radio"]', primary_method="Radio"
+system_name="RA180", system_type="Radio System", child_label="Channel"
+system_name="Motorola", system_type="Radio System", child_label="Channel"
+system_name="Rakel", system_type="Radio System", child_label="Channel"
+system_name="Courier", system_type="Courier", child_label=NULL
 ```
 
 **Indexes**:
@@ -246,53 +258,77 @@ system_name="RA146", system_type="Radio System", supported_methods='["Radio"]', 
 - `idx_comm_systems_type` ON system_type - Filter by system type
 - UNIQUE index on system_name
 
-### channel_designations
-Stores configured channel designations for systems that support channelized methods (Radio systems).
+### communication_options
+Stores configured recursive option rows beneath a top-level communication system.
+
+This is the actual data behind the current tiered UI. The first option level under a system may appear as `tier_2` today, and its children may appear as `tier_3`, but the storage itself is recursive so future deeper structures do not require a new schema.
 
 **Fields**:
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT - Unique identifier
 - `communication_system_id` INTEGER NOT NULL - Foreign key to communication_systems.id
-- `channel_number` TEXT NOT NULL - Technical channel (e.g., "5", "7")
-- `designation_name` TEXT NOT NULL - Human-readable name (e.g., "Company Net")
+- `option_value` TEXT NOT NULL - Stable stored value / technical identifier (e.g., "5", "A", "DATA")
+- `option_label` TEXT NOT NULL - Human-readable label shown to the operator (e.g., "Company Net", "Channel A")
+- `parent_option_id` INTEGER NULL - Optional parent option row when this option belongs beneath another option
+- `child_label` TEXT NULL - Label to show for the next visible level beneath this option, if children exist
+- `sort_order` INTEGER NULL - Display order in UI
 - `is_active` INTEGER NOT NULL DEFAULT 1 - Soft delete flag (0=inactive, 1=active)
 
-**Default data** (Phase 1 - for your unit, assuming RA180 and RA146 both support these channels):
-- RA180: Company Net (Ch 5), Platoon 1 Net (Ch 7), Platoon 2 Net (Ch 9)
-- RA146: Company Net (Ch 5), Platoon 1 Net (Ch 7), Platoon 2 Net (Ch 9)
-  (same channels, different systems)
+**Default data** (Phase 1 - for your unit):
+- **RA180 root children**: Company Net (Ch 5), Platoon 1 Net (Ch 7), Platoon 2 Net (Ch 9)
+- **Motorola root children**: locally meaningful channel selections for close-range group/platoon communication
+- **Rakel root children**: selected operational channel set for the simplified first-pass radio use
+- **Courier**: no child option rows by default in Phase 1
+- Deeper child rows may remain empty in Phase 1 for many systems even though the recursive storage supports them
 
 **Indexes**:
-- `idx_channel_system` ON communication_system_id - Find channels for a system
-- `idx_channel_active` ON is_active - Filter active channels
-- UNIQUE index on (communication_system_id, channel_number, designation_name)
+- `idx_comm_option_system` ON communication_system_id - Find options for a system
+- `idx_comm_option_parent` ON parent_option_id - Find child options for a parent option
+- `idx_comm_option_active` ON is_active - Filter active options
+- UNIQUE index on (communication_system_id, option_value, parent_option_id)
 
 **Constraints**:
 - FOREIGN KEY (communication_system_id) REFERENCES communication_systems(id) ON DELETE CASCADE
+- FOREIGN KEY (parent_option_id) REFERENCES communication_options(id) ON DELETE CASCADE
 
-### system_capabilities_config
-Stores configuration for system-specific capability fields (what controls to show, valid values, defaults).
+**Recursive structure note**:
+- Top-level systems are stored in `communication_systems`.
+- Options beneath a system are stored recursively in `communication_options`.
+- A node's direct children are found by querying `communication_options` where `parent_option_id = this_option.id`.
+- The current UI may choose to render only the first three visible levels, but repository/core traversal may still treat the structure as a general tree with a runtime `max_recursion_depth` safeguard.
+
+### communication_qualifiers_config
+Stores configuration for top-level qualifiers and other simple operator-visible options that belong to a system.
 
 **Fields**:
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT - Unique identifier
 - `communication_system_id` INTEGER NOT NULL - Foreign key to communication_systems.id
-- `capability_key` TEXT NOT NULL - Key name in JSON (e.g., "transmission_mode", "encryption")
+- `qualifier_key` TEXT NOT NULL - Key name in JSON (e.g., "encrypted", "data")
 - `label` TEXT NOT NULL - UI label (e.g., "Transmissionslägen")
 - `field_type` TEXT NOT NULL - Data type ("enum", "boolean", "text")
 - `valid_values` TEXT NULL - JSON array of valid values (for type="enum")
 - `default_value` TEXT NULL - Default value (string representation)
 - `help_text` TEXT NULL - UI tooltip/help text
-- `applies_to_methods` TEXT NULL - JSON array of methods this capability applies to (e.g., `["Radio", "Data"]` for transmission_mode)
+- `visibility_mode` TEXT NOT NULL DEFAULT 'editable' - How the option behaves for the operator (`editable`, `forced`, `hidden`)
 
-**Default data** (Phase 1 - RA180 capabilities):
+**Default data** (Phase 1 - key-system qualifiers):
 ```
-communication_system_id=1 (RA180), capability_key="transmission_mode", label="Transmissionslägen", 
-  field_type="enum", valid_values='["DART", "Speech"]', default_value="Speech",
-  applies_to_methods='["Radio", "Data"]'
+communication_system_id=1 (RA180), qualifier_key="encrypted", label="Krypterad", 
+  field_type="boolean", valid_values=NULL, default_value="false", visibility_mode="editable"
 
-communication_system_id=1 (RA180), capability_key="encryption", label="Kryptering", 
-  field_type="boolean", valid_values=NULL, default_value="false",
-  applies_to_methods='["Radio", "Phone", "Data"]'
+communication_system_id=1 (RA180), qualifier_key="data", label="Data", 
+  field_type="boolean", valid_values=NULL, default_value="false", visibility_mode="editable"
+
+communication_system_id=2 (Motorola), qualifier_key="encrypted", label="Krypterad", 
+  field_type="boolean", valid_values=NULL, default_value="false", visibility_mode="forced"
+
+communication_system_id=3 (Rakel), qualifier_key="encrypted", label="Krypterad", 
+  field_type="boolean", valid_values=NULL, default_value="true", visibility_mode="forced"
 ```
+
+**Qualifier / capability notes**:
+- The initial refined model favors simple top-level qualifiers over a large method/capability hierarchy.
+- Qualifiers may be operator-editable, forced to a value, or hidden for a given system.
+- Later work may still introduce more complex selector/qualifier structures if operational value justifies it.
 
 **Channel-Specific Capability Restrictions**:
 - **Real-world constraint**: Some channels may have capability restrictions (e.g., Ch1=DART only, Ch2=DART+Speech, Ch3=Speech only)
@@ -304,13 +340,13 @@ communication_system_id=1 (RA180), capability_key="encryption", label="Krypterin
   - If needed later: Phase 3+ could add channel-specific capability overrides
 
 **Indexes**:
-- `idx_capabilities_system` ON communication_system_id - Find capabilities for a system
-- UNIQUE index on (communication_system_id, capability_key)
+- `idx_comm_qualifiers_system` ON communication_system_id - Find qualifier definitions for a system
+- UNIQUE index on (communication_system_id, qualifier_key)
 
 **Constraints**:
 - FOREIGN KEY (communication_system_id) REFERENCES communication_systems(id) ON DELETE CASCADE
 
-**Reasoning**: System-specific capabilities configuration tells GUI what controls to render based on selected system and method.
+**Reasoning**: System-specific option configuration tells GUI what top-level controls to render and how they behave for the selected system.
 
 ### report_templates
 Stores configuration for structured report templates (7S, 9-liner, etc.).
@@ -443,7 +479,7 @@ Store as INTEGER (0 = false, 1 = true)
 
 ### JSON Storage
 Store as TEXT with JSON format
-- Used for: method_metadata, report_data, template_config, complex user_preferences
+- Used for: communication_path, communication_qualifiers, report_data, template_config, complex user_preferences
 - Python: `json.dumps()` and `json.loads()`
 - Validate before storing (must be valid JSON)
 
@@ -468,9 +504,9 @@ Phase 1 attachment content is stored inside the encrypted database
 
 ### CommunicationEntry Operations
 - CRUD for communication_entries
-- Search/filter by date range, operator, from/to, method_type, channel_designation
+- Search/filter by date range, operator, from/to, communication_system, and selected communication qualifiers/path where practical
 - Full-text search in message_content
-- List entries with optional filters (method type, date range, etc.)
+- List entries with optional filters (system, date range, qualifier state, etc.)
 
 ### EventEntry Operations
 - CRUD for event_entries
@@ -498,9 +534,9 @@ Phase 1 attachment content is stored inside the encrypted database
 
 ### Configuration Management
 - Get/set communication systems (communication_systems table)
-- Get supported methods for a system (from communication_systems.supported_methods)
-- Get/set channel designations (channel_designations table) - linked to specific systems
-- Get/set system capabilities config (system_capabilities_config table) - linked to specific systems
+- Get child-label behavior for a system or option-node when rendering the next visible level
+- Get/set recursive option rows (`communication_options` table) - linked to specific systems and parented for deeper option paths
+- Get/set top-level qualifier config (`communication_qualifiers_config` table) - linked to specific systems
 - Get/set report templates (report_templates table)
 - Get/set categories (categories table)
 - Get/set user preferences (user_preferences table)

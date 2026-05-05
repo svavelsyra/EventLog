@@ -31,6 +31,13 @@
 - Prefer one centralized backend-policy seam that owns supported dialects, startup field requirements, remembered-target normalization/persistence behavior, cleanup metadata dispatch, coarse capability facts, and per-dialect repository construction dispatch.
 - Shared startup field/profile types may remain in a small separate module, but policy decisions themselves should not be duplicated across multiple startup modules.
 
+## Session 081 - Bounded Recursion Can Be Better Than Ad Hoc Hierarchy Handling
+
+- When the domain is naturally hierarchical, do not reject recursive storage/reading patterns just because they look abstract at first glance.
+- The user explicitly prefers a recursive or tree-like structure over sprawling special-case `if/else` handling when it makes the model cleaner and more uniform.
+- For communication configuration, a recursive shape may still be desirable even if the current operator-facing UI caps depth at three tiers.
+- The real design question is not “avoid recursion?” but rather “how much recursion should the business rules permit, and where should the current UI/runtime place its practical depth limit?”
+
 ## Session 054 - Reset Integration Tests Need Real On-Disk SQLite Targets
 
 - For reset-flow integration coverage, prefer temporary on-disk SQLite databases over `:memory:` so the test can exercise the real close/invalidate/delete sequence and confirm file-backed cleanup behavior.

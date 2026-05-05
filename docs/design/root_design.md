@@ -2,7 +2,7 @@
 
 **Project**: Platoon Event Logger  
 **Version**: 1.0.0
-**Last Updated**: 2026-04-30  
+**Last Updated**: 2026-05-05  
 
 ## Domain Model
 
@@ -35,9 +35,9 @@ The application is no longer designed around one generic message-log entry. The 
    - When the operator entered it into the system
    - Type: DateTime (auto-populated)
 
-6. **Communication Method** (how it was sent/received)
-   - Radio, phone, in-person, written order, etc. for communication entries
-   - Type: String (or enumeration)
+6. **Communication Selection** (how it was sent/received)
+   - Communication entries use a configuration-driven selection built around a top-level communication system/way, optional configured child options beneath it, and top-level qualifiers where relevant
+   - Current UI may show only the first few visible levels even though the underlying configuration model is allowed to be deeper
 
 7. **Operator** (who logged it)
    - The operator who made the log entry
@@ -51,7 +51,7 @@ The application is no longer designed around one generic message-log entry. The 
 - ID (primary key)
 - Type-specific metadata as needed
 - Edited-flag behavior should use a configurable grace period stored in the database `settings` table (default: 300 seconds)
-- Event entries may include `priority`, `category`, and `whom`
+- Event entries may include `priority`, `category`, and `whom`, with category/priority values coming from one shared operational runtime source rather than presenter-local lists
 - Personnel entries may include `status`, `location`, `active`, and check-in alarm fields
 
 ## User Interface Design
@@ -91,7 +91,7 @@ The application is no longer designed around one generic message-log entry. The 
 All fields from the MessageLogEntry entity, with:
 - Auto-populated logged time
 - Date/time pickers for event time
-- Dropdown for communication method
+- Configuration-driven communication selection for system/way, visible child options, and qualifiers where applicable
 - Checkbox for confirmed status
 
 ## Database Design
@@ -102,8 +102,8 @@ All fields from the MessageLogEntry entity, with:
 - **personnel_entries** - personnel status/history entries
 - **file_attachments** - generic attachments whose content is stored inside the encrypted database in Phase 1
 - **structured_reports** - report templates attached to events
-- **communication_systems** / **channel_designations** / **system_capabilities_config** - communication configuration
-- **report_templates** / **categories** / **user_preferences** - runtime configuration and user-managed metadata
+- **communication_systems** / **communication_options** / **communication_qualifiers_config** - communication runtime configuration
+- **report_templates** / **categories** / **priorities** (or equivalent event-metadata source) / **user_preferences** - runtime configuration and user-managed metadata, with priorities/categories expected to come from one shared runtime authority
 - **settings** - low-level repository settings such as the edited-flag grace period in seconds
 
 ### Attachment Storage Policy
@@ -154,14 +154,14 @@ Application-facing repositories provide CRUD and query operations such as:
 - The AI-maintained database design detail currently lives in `ai_instructions/design/db_design.md` until the human design docs are split further.
 
 ## Open Questions
-- Should communication methods be enumerated or free text?
-  Decision: Enumerated with option for "Other" and free text if "Other" is selected.
+- Should communication selection be modeled as one flat method list or as configuration-driven systems plus options?
+  Decision: Configuration-driven top-level systems/ways with configured child options beneath them, while the current UI stays practically bounded.
 - Do we need operator management (list of operators)?
   Decision: No, but maybe keep last operator in the field with possibility for operator to change when logging.
 - Should we support message priorities or categories?
-  Decision: Yes both priorities as Enumeration and categories as tags (tags selected from user managed list)
+  Decision: Yes; event categories and priorities should come from one shared operational runtime source rather than ad hoc user-managed lists.
 - Archive/export functionality requirements?
-  Decision: Export as CSV, database backup and restore, PDF export.
+  Decision: Human-readable/export features may exist later, but Epic `003` portability is a narrow allowlisted operational-config import/export path, not full database backup/restore.
 
 ## Next Steps
 1. Further refinement of Architecture and Design

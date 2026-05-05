@@ -57,6 +57,44 @@
 - **Method**: DART vs Speech
 - **Channel**: Frequency or channel number
 - **Designation**: What the channel is called at time of logging
+- **Important nuance**: Channels are **not** a radio-only concept in this project. The same broad idea of a channel/designation can appear in other communication systems too (for example Slack-style channels), even when the exact operational meaning differs.
+- **Terminology warning**: "Channel", "designation", and related terms may be reused across different communication technologies with different semantics. Future design and implementation work must not hardcode radio-specific assumptions into generic communication configuration contracts.
+
+### Communication Complexity and Modeling Guardrail
+
+- The project has **many ways of communication**, and the user intentionally prefers the broader word **"ways"** because terms like "channel" and "method" carry domain-specific weight and can easily become misleading if used too generically.
+- Example communication systems/ways already called out by the user:
+  - **RA180** - can support spoken radio, data messaging, and connection into the telephone net; the user does not currently need fine-grained separation between DART and PCDART, only the meaningful distinction that it is **data**.
+  - **RA146** - simple cleartext radio only.
+  - **Motorola** - clear text close range group-platoon communication.
+  - **RAKEL** - much more complex capability set and communication structure than simple radio modeling suggests.
+  - **Telephone** - can be plain telephone, crypto telephone, or used for data transfer with separate crypto apparatus/app support.
+  - **Courier** - an important non-radio communication way/example that should help keep the model from silently assuming every configured communication system is radio-based.
+  - **Spoken word / in-person meeting** - direct human communication with no electronic system.
+- **Crypto apparatus/app capability is cross-cutting**: some added technology such as a `krypapp` may ride on top of another communication way rather than being the base system itself. Example: the same base RA180 audio path might exist both with and without added crypto apparatus.
+- **Modeling goal**: preserve important operational nuance without making day-to-day logging so complex that users will avoid or misuse it.
+- **Design warning**: do not assume every meaningful difference must become a separate first-class base system. Some distinctions may be better expressed as optional capabilities or variants attached to a base way.
+- **Configuration flexibility goal**: the initial default set should stay practical and fairly simple, but later admin/operator-defined configuration must be able to express richer combinations, such as one base way plus optional added technology/capabilities.
+- **Current preferred modeling direction**: use a **three-tier selection model** for communication configuration with optional lower tiers, plus optional additional boolean-like flags/capabilities for simple cross-cutting distinctions such as clear/encrypted.
+- **Important boundary**: the three tiers are primarily a practical runtime/UI selection shape, not proof that every communication way literally has the same real-world "channel" semantics at each level.
+- **Design intent**: keep the operator-facing selection model stable and simple while allowing system-specific meaning for the tiers and a small set of optional qualifiers.
+- **Current Phase 1 boolean direction**: start with **tier-1/system-level booleans only**, while leaving room for deeper/path-specific qualifiers later if real use demands it.
+- **Top-level security qualifier importance**: `encrypted` / `clear` is important enough to be treated as a top-level per-communication qualifier because it matters operationally and should be filterable later.
+- **Qualifier override rule**: even when a qualifier such as `encrypted` / `clear` exists at top level, an individual system may override how that qualifier behaves: selectable, forced to a fixed value, or hidden/uneditable when not meaningful for operator choice.
+- **Current Phase 1 simplifications by key system**:
+  - **RA180** - use channels; keep the selectable communication distinction to **Speech/Data** plus **encrypted/clear**.
+  - **Motorola** - clear only; channels matter.
+  - **Rakel** - treat as encrypted-only for the initial model; channels matter.
+- **Courier side note**: courier is still a valuable non-radio example even though it may in some cases carry encrypted material on paper; the main modeling lesson is that the system can force or hide top-level qualifiers when operator choice is not the important part.
+- **Operational implication**: encrypted/clear is not only display detail; it may affect how communications are reviewed and filtered later.
+- **RA180 practical use clarification**:
+  - In normal use, the operator typically sets an RA180 **mode** to either `clear` or `encrypted`.
+  - The operator also selects a **channel** for send/receive.
+  - A data sender such as **DART** may then be attached and the same configured radio is often used for both voice and data.
+  - The most common practical setup is one selected channel, mode set to `encrypted`, DART connected, and the radio used for both voice and data.
+  - Channel-specific data/voice restrictions can exist operationally (for example data only on one channel, data+voice on another, voice only on a third), but the app does **not** need to enforce those restrictions in Phase 1; they are important as domain context, not as a required hard validation rule.
+  - When crypto data is attached to RA180, operators may still switch between `clear` and `encrypted` for speech use, while data use is effectively encrypted-only in practice.
+  - For Phase 1 UX, a simple boolean-like `Data` flag may be acceptable if unchecked means ordinary speech/voice, but this remains a design choice rather than a finalized rule.
 
 **Historical accuracy requirement**: Logs must preserve channel designations as they were at time of logging, because designations can change during operations.
 

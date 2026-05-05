@@ -262,171 +262,98 @@ The Communication Tab must support three critical workflows:
 6. **Operator** - Who logged it (person at the terminal)
 7. **Confirmed** - Was receipt acknowledged? (boolean/checkbox)
 
-#### Communication Method (Hierarchical)
-This is the complex part - communication method has multiple levels:
+#### Communication Selection (Recursive Under the Hood)
+This is the complex part - communication selection is driven by a recursive configuration tree beneath a top-level communication system/way.
 
-**Top Level - Method Type**:
-- Radio
-- Ordnance (written orders)
-- In Person
-- Phone
-- Other
+### Communication System + Recursive Path Selection
 
-**If "Radio" is selected** → Additional fields appear:
-- **Radio System**: System 1, System 2, System 3, etc.
-- **Channel & Designation**: Combined selection/entry
-
-### Communication System & Method Selection
-
-**Design Philosophy - System-Centric**:
-- **Primary selection**: Which communication system (RA180, RA146, Email, or none)
-- **Secondary selection**: How the system was used (Radio, Phone, Data)
-- **Tertiary selection**: Channel/designation (if applicable)
-- **Quaternary selection**: System capabilities (DART vs Speech, encryption, etc.)
-
-**Key Insight**: Military communication systems (RA180, RA146) can support multiple methods (radio, phone, data/fax). The system hardware is the starting point.
+**Design Philosophy - Recursive Underlying Model, Bounded Visible UI**:
+- **Primary selection**: choose the top-level communication system/way (`RA180`, `Motorola`, `Rakel`, `Courier`, etc.)
+- **Child selections**: choose the configured path beneath that system
+- **Top-level qualifiers**: choose or accept qualifiers such as `encrypted` and possibly `data`
+- The current GUI may still render only the first **three visible levels** for practical use, but the underlying structure is recursive and should not require redesign if a fourth visible level is ever needed later.
 
 **Configuration Requirements**:
-1. **Communication Systems**: Configurable list of systems (RA180, RA146, etc.)
-   - **Phase 1 (Platoon)**: One entry per system type (e.g., one "RA180")
-   - **Phase 2 (Company)**: 
-     - Simple: Still one "RA180" with all channels (most common - instance doesn't matter)
-     - Detailed: Multiple instances "RA180-1", "RA180-2", "RA180-Nord" (when tracking specific radio matters)
-2. **Supported Methods per System**: Each system defines what it can do (RA180: Radio/Phone/Data)
-3. **Channels**: Pre-configured per system (for systems that support channelized methods like Radio)
-4. **Channel Designations**: Must be configurable **on the fly** (channels can change suddenly in operations)
-5. **System Capabilities**: Configurable per system (transmission mode, encryption, etc.)
-   - **Note**: Channel-specific capability restrictions exist in real operations (e.g., Ch1=DART only) but are NOT enforced by app
-   - **Reasoning**: Operator knows constraints; app logs what was actually used (reality, not theoretical limits)
+1. **Communication Systems/Ways**: configurable top-level list (`RA180`, `Motorola`, `Rakel`, `Courier`, etc.)
+2. **Recursive Child Options**: each system can have zero or more child options; each option can in turn have zero or more child options
+3. **Child Labels**: each system/option can define what the next visible selection level should be called
+4. **Top-Level Qualifiers**: systems define whether qualifiers like `encrypted` or `data` are editable, forced, or hidden
+5. **Practical UI Limit**: current operator workflow should stay bounded and simple even if the underlying configuration tree could go deeper later
 
 **Example Scenario**:
-- RA180, Channel 5 = "Company Net" (today)
-- Tomorrow: RA180, Channel 7 = "Company Net" (channel designation moved)
-- Or: Suddenly need to add "Platoon 3 Net" on Channel 9 for RA180
+- Today: `RA180` → `Company Net`
+- Tomorrow: `RA180` → `Company Net` moves to a different channel/value underneath the same system tree
+- Later: a deeper child option may be added under one channel/path without redesigning the overall GUI architecture
 
-### Data Model for Communication
+### Data Model for Communication (GUI-Relevant View)
 
-**Proposed Structure**:
-- **Communication Systems Table**: Configurable list of systems (RA180, RA146, Email, etc.)
-  - Each system defines: supported_methods (JSON array), primary_method
-- **Channel Designations Table**: Links system + channel number + designation name
-  - `id`, `communication_system_id`, `channel_number`, `designation_name`, `is_active`
-  - Example: `1, <RA180 id>, "5", "Company Net", true`
-- **System Capabilities Config Table**: Defines valid capabilities per system
-  - Capability keys, types, valid values, defaults
-  - Can specify which methods each capability applies to
+**Configured Structure**:
+- **Communication Systems Table**: top-level systems/ways
+- **Communication Options Table**: recursive child options beneath a system
+- **Communication Qualifiers Config Table**: defines top-level qualifier controls and behavior per system
 
-**CommunicationEntry Storage**:
-- `communication_system`: "RA180"
-- `method_type`: "Radio"
-- `method_channel`: "5"
-- `channel_designation`: "Company Net"
-- `system_capabilities`: `{"transmission_mode": "DART", "encryption": true}` (optional)
+**CommunicationEntry Storage Snapshot**:
+- `communication_system`: `"RA180"`
+- `communication_path`: `[ {"value": "5", "label": "Company Net"} ]`
+- `communication_qualifiers`: `{"encrypted": true, "data": true}`
 
-**Why store all fields?** Historical accuracy - if channel designations or configurations change, old logs still show what was used at that time.
+**Why store the selected path snapshot?** Historical accuracy - if labels or child structures change later, old logs still show what the operator actually chose at that time.
 
 ### UI Design for Communication Entry Form
 
-**Decision**: Use dropdown selection (not free-text) to prevent spelling variations and maintain data consistency.
+**Decision**: Use dropdown selection (not free-text) for configured system/path choices to prevent spelling variations and maintain data consistency.
 
-**UI Flow** (System-Centric):
+**UI Flow** (recursive underneath, bounded in presentation):
 1. User selects **Communication System** from dropdown
-   - Options: "RA180", "RA146", "(Ingen - In Person/Ordnance)" 
-   - Special entry: "+ Lägg till system..." (future Phase 2+)
-2. **Method dropdown** appears/enables, populated with system's supported methods
-   - If RA180 selected: Shows "Radio", "Phone", "Data"
-   - If RA146 selected: Shows "Radio" only
-   - If "(Ingen)" selected: Shows "In Person", "Ordnance", "Other"
-3. User selects Method (e.g., "Radio")
-4. **If method supports channels** (e.g., Radio):
-   - **Channel Designation** dropdown appears/enables
-   - Populated with active designations for selected system
-   - Shows: **"Company Net (Ch 5)"** - designation first, channel in parentheses
-   - Special entry at bottom: **"+ Lägg till beteckning..."** → Opens quick-add dialog
-5. **System Capabilities fields** appear/enable (based on system + method)
-   - RA180 + Radio: Shows "Transmissionsläge" dropdown, "Kryptering" checkbox
-   - RA180 + Phone: Shows "Kryptering" checkbox only (no transmission mode for phone)
-   - Configuration (`applies_to_methods`) determines which capabilities show for each method
-6. If user changes System or Method, dependent fields update dynamically
+   - Options: `RA180`, `Motorola`, `Rakel`, `Courier`, etc.
+   - Special entry: `+ Lägg till ...` remains a future focused flow, not a full admin UI
+2. GUI checks whether the selected system has active root child options
+3. If yes, show the next configured dropdown using the system's `child_label`
+4. When the user picks a child option, GUI checks whether that option has children
+5. If yes, show the next dropdown using that option's `child_label`
+6. Stop when:
+   - no more child options exist, or
+   - the current practical visible-depth limit is reached
+7. Show top-level qualifier controls for the selected system
+   - editable qualifier → normal control
+   - forced qualifier → prefilled and non-editable or hidden depending on UX choice
+   - hidden qualifier → not shown but still available to runtime/storage behavior if needed
 
-**Quick Add Dialog** (for new channel designations):
-- Input: Channel Number (numeric)
-- Input: Designation Name (text)
-- Button: Save (adds to system immediately, selects it in main form)
-- Button: Cancel
+**Current Phase 1 examples**:
+- **RA180** → likely one visible child dropdown for channel selection + top-level `encrypted` and likely `data`
+- **Motorola** → one visible child dropdown for channel selection + forced clear/no-encryption behavior
+- **Rakel** → one visible child dropdown for channel selection + forced encrypted behavior
+- **Courier** → no child dropdowns in Phase 1
 
-**Reasoning**: System-first approach matches operator mental model (picking up RA180 handset vs RA146).
-  - `type: "enum"` + `values: [...]` → Renders Dropdown
-  - `type: "boolean"` → Renders Checkbox
-  - `type: "text"` → Renders Text field
-  
-  This generates UI:
-  - Dropdown: "Transmissionsläge: [Speech ▼]" (with DART, Speech options, default: Speech)
-  - Checkbox: "☐ Kryptering" (default: unchecked/false)
-
-- **Stored in entry**: When user selects DART and enables encryption:
-  ```json
-  method_metadata = {"transmission_mode": "DART", "encryption": true}
-  ```
-  
-- **Default handling**:
-  - Enum: `default` must be one of the values in `values` list (or null/empty for no default)
-  - Boolean: `default` is `true` or `false`
-  - Text: `default` is a string value like `""` or `"Foobar"`
-  
-- **All optional**: Operator can leave at defaults or change as needed
-- **Auto-convert**: GUI collects control values and creates JSON for storage
-- **Operator never types JSON**: Pure UI controls (dropdowns, checkboxes)
-
-**Reasoning**: Simpler configuration structure - type alone determines which control to use.
-
-**Quick Add Dialog** (for new channel designations):
-- Input: Channel Number (numeric)
-- Input: Designation Name (text)
-- Button: Save (adds to system immediately, selects it in main form)
-- Button: Cancel
-
-**Reasoning**: Dropdown prevents "Company Net" vs "CompanyNet" vs "Company net" data quality issues.
+**Quick Add Flow**:
+- A focused quick-add dialog may later add a new child option at the currently relevant level in the tree
+- This is not a full tree editor in Phase 1; it is a practical operational fast-add seam
 
 ### Dynamic Field Behavior
 
-**Decision**: Show/hide approach for method-specific fields.
+**Decision**: Show/hide recursive selection controls and qualifier controls based on configuration.
 
-**Reasoning**: Cleaner UI - users don't see irrelevant disabled fields when logging phone calls or in-person communications.
+**Reasoning**: Cleaner UI - users should only see the currently relevant next step and the relevant qualifiers, not a large static block of irrelevant disabled fields.
 
 **What Shows/Hides** (configuration-driven):
-- When method_type changes, GUI checks configuration for that method type
-- If method has hierarchical fields configured → show method_system, channel_designation, method_channel
-- If method has metadata configured → show metadata controls (dropdowns, checkboxes)
-- If method has neither configured → show only basic fields (message, from, to)
+- When `communication_system` changes, GUI loads that system's root children and qualifier behavior
+- When a child option changes, GUI loads that option's children for the next visible level
+- If no children exist, no further selection dropdown is shown
+- Qualifier controls show/hide or become read-only according to per-system configuration
 
-**Phase 1 Configuration**:
-- **Radio**: Has hierarchy (method_system, channel_designation, method_channel) + metadata (transmission_mode, encryption)
-- **Phone, In Person, Ordnance, Other**: No hierarchy, no metadata (fields hidden)
+**Future-proofing**:
+- If later systems need deeper structures, the GUI logic should already be based on recursive traversal and a configurable maximum visible depth rather than a hardcoded `if tier_2` / `if tier_3` chain.
 
-**Future-proof**: When adding Slack/Email/etc., just add their configuration - GUI adapts automatically without code changes.
+### Implementation Phases for Communication Configuration UI
 
-**Example**:
-- Method = "Radio" → Shows: system dropdown, channel dropdown, transmission mode dropdown, encryption checkbox
-- Method = "Phone" → Shows: nothing extra (just basic communication fields)
-- Method = "Slack" (future) → Shows: workspace dropdown, channel dropdown (whatever is configured for Slack)
+**Phase 1 (Proof of Concept)**:
+- Seed systems, recursive child options, and top-level qualifier definitions in the database
+- GUI renders the first few visible levels from that configuration
+- No full management UI yet - only selection and later small quick-add seams
 
-### Implementation Phases for Method Configuration
-
-**Phase 1 (Proof of Concept)**: 
-- Hardcode method systems and channel designations directly in database seed data
-- Example seed data:
-  - System 1: Company Net (Ch 5), Platoon 1 Net (Ch 7), Platoon 2 Net (Ch 9)
-  - System 2: Command Net (Ch 1), Logistics Net (Ch 3)
-- Hardcode method metadata options:
-  - Radio: transmission_mode (DART/Speech), encryption (boolean)
-- Use these for testing and initial development
-- **No management UI yet** - just dropdowns populated from database
-
-**Phase 2 (Template Selection)**:
-- Pre-configured metadata setup templates
-- User selects template for mission (most use same template each time)
-- Templates stored in database, selectable at mission start
+**Phase 2+ (Future)**:
+- Focused editing flows may allow broader operator/admin changes to the tree
+- Visible UI depth can remain practically limited even if the underlying structure grows
 
 **Phase 3 (Future - Full Customization)**:
 - Add Settings/Admin tab with management UI:
