@@ -2,7 +2,7 @@
 
 **Project**: Platoon Event Logger  
 **Version**: 1.0  
-**Last Updated**: 2026-04-28  
+**Last Updated**: 2026-05-04  
 
 ## Purpose
 A desktop application for logging events during platoon staff operations. This includes:
@@ -63,10 +63,11 @@ The application follows a strict layered architecture with clear separation of c
 - Repository business rules may read low-level configuration from the database `settings` table (for example the edited-flag grace period stored in seconds)
 
 #### Factory Pattern
-- `RepositoryFactory` currently constructs `EventLogRepository` with a `SQLiteAdapter`
-- Keeps backend selection and repository construction out of higher layers
+- `src/db/repositories/bootstrap_backend_policy.py` is the centralized startup/bootstrap backend-policy seam
+- It owns supported-dialect facts, startup field requirements, remembered-target normalization/persistence behavior, coarse startup capability facts, and per-dialect repository creation dispatch
+- `RepositoryFactory` now stays a thinner construction facade over that centralized policy seam
 - Creates a future extension point even while SQLite is the only current dialect
-- Current factory/bootstrap wiring is still transitional at the startup-policy level, but the legacy SQLite repository compatibility shell is no longer part of the active architecture
+- The earlier temporary bootstrap target wrapper modules are no longer part of the active architecture
 
 #### Model-View-Presenter (MVP)
 - **View**: Pure UI, no business logic
@@ -82,10 +83,74 @@ The application follows a strict layered architecture with clear separation of c
 - **Deployment**: Single machine, offline, no Git
 
 ## Current Database Runtime Shape
-- `RepositoryFactory` is the current construction seam for repository creation
+- `bootstrap_backend_policy.py` is the current ownership seam for startup/bootstrap backend policy and repository-creation dispatch
+- `RepositoryFactory` is the thin construction facade used by higher-level bootstrap orchestration
 - `SQLiteAdapter` owns connection lifecycle, schema initialization, SQL execution primitives, and transaction primitives
 - `EventLogRepository` owns CRUD workflows, query behavior, row mapping, and repository-level business rules
 - Remaining transition work is primarily about startup/version policy refinement and future repository splitting, not legacy repository compatibility
+
+## Startup and Bootstrap Contract
+
+- `config.ini` is a convenience layer, not an authority layer.
+- The application must always be able to start even when remembered bootstrap values are missing or malformed.
+- Startup begins by resolving the selected database technology, using remembered values only as prefill hints.
+- The startup UI is dynamic: once a technology is selected, the UI decides which target fields, selectors, file pickers, and authentication inputs are relevant for that technology.
+- Persistence-owned startup capability seams may expose only stable technical startup requirements such as field identity, input kind, and required/editable flags.
+- The centralized persistence-owned startup policy seam is `src/db/repositories/bootstrap_backend_policy.py`; app wiring and presenters should depend on that seam instead of splitting startup facts across multiple helper modules.
+- GUI code owns display labels, button wording, and browse-button behavior derived from those stable startup field identities; presenter-facing field-label metadata must not leak downward into persistence contracts.
+- The create flow validates the operator's selected setup against the administrator-defined creation-time policy envelope, including allowed technologies and allowed credential combinations.
+- Repository creation happens only after the selected technology-specific startup flow has collected and validated enough information to proceed.
+- Malformed bootstrap memory may prevent automatic repository creation, but it must not prevent the application from reaching a usable recovery/startup UI.
+
+### Policy Ownership
+
+- The application should guide users toward sensible and safer choices, but it should not hard-code one universal workflow that ignores operational reality.
+- Administrators define the allowed policy envelope for creating new databases, including allowed technologies and minimum credential requirements.
+- Operators then choose a concrete setup within that envelope.
+- Once a database has been created, that database's own protected state becomes the authoritative source for its effective rules.
+- Later changes to local config may affect future database creation on that machine, but they are not retroactive authority over already-created databases.
+
+## Security Boundary and Ownership
+
+- Security-relevant code should remain reviewable as a deliberate boundary rather than being scattered across GUI, repository, and configuration code.
+- Shared security code exists to make future audit scope obvious: reviewers should be able to inspect the common security primitives without also tracing unrelated application behavior.
+- The shared security boundary should contain only cross-technology security concerns such as generic key-derivation primitives, secret-material handling helpers, generic credential/file validation helpers, shared security exceptions, and secure-deletion behavior.
+- Backend-specific security behavior belongs with the backend that owns it. If SQLite/SQLCipher requires a particular salt contract, key formatting rule, metadata rule, or unlock/readiness check, that behavior should live with the SQLite implementation rather than in the shared security boundary.
+- GUI and startup orchestration may collect credentials and display generic error messages, but they should not own backend-specific cryptographic behavior.
+- Configuration parsing may supply policy inputs and defaults, but it should not silently become the place where backend-specific security behavior is defined.
+
+### Primitive vs Policy Split
+
+- Low-level shared security helpers should enforce structural validity and abuse-protection limits only.
+- Higher layers may still define recommended defaults and administrative policy, but those policies should be passed into helpers explicitly rather than being hidden as hard-coded assumptions in low-level primitives.
+- Password policy remains intentionally minimal: administrators may define a minimum length in configuration, but the architecture does not require composition rules such as uppercase, digits, or symbols.
+- Allowed credential combinations are policy-driven rather than hard-coded: depending on admin policy and backend support, a database may be created with no credential material, password only, key file only, or password + key file.
+- Generic key derivation should stay portable so future backends can reuse the primitive while still owning their own backend-specific salt, metadata, and readiness rules.
+
+### Remembered Config Roles
+
+- **UI/app convenience state**: window size, position, and similar non-critical memory
+- **Security creation defaults / policy inputs**: admin-overridden defaults and allowed-policy guidance used when creating NEW encrypted databases
+- **Bootstrap memory**: remembered last-used database technology/target and related startup hints used to prefill the startup UI
+
+### Recovery States
+
+- **No remembered database**: show startup UI with empty or safe defaults
+- **Remembered values valid**: prefill startup UI from config
+- **Remembered values partially malformed**: keep usable values, discard invalid ones, keep startup UI usable
+- **Remembered values unusable**: fall back to manual create/select flow without blocking startup
+
+### Current Phase Note
+
+- SQLite is the only currently implemented backend, so some current startup examples naturally mention file paths, SQLCipher, and key-file-driven unlock behavior.
+- Those are current-technology details, not universal startup rules for all future backends.
+- Architecture must keep the technology-selection step generic so a different backend can later provide a different startup form and readiness flow.
+- The same rule applies to security documentation and implementation ownership: SQLite-specific security behavior is allowed, but it should be labeled and located as SQLite-owned behavior rather than being presented as the permanent generic security contract.
+
+## Attachment Security Boundary
+- Phase 1 attachment content belongs inside the encrypted database boundary, together with its attachment metadata.
+- Plaintext filesystem attachment directories are not part of the approved secure architecture.
+- If large-attachment support is ever approved later, it must use separately encrypted external storage rather than a fallback to normal readable files.
 
 ## Key Constraints
 - ✅ Offline only - no network dependencies

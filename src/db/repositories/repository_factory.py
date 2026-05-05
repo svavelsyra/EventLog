@@ -1,22 +1,18 @@
 """Repository factory for EventLog persistence.
 
-WARNING: This is a deliberately naive transitional factory.
-It centralizes the current SQLite-only repository construction path so higher
-layers stop hardcoding SQLite wiring, but it is not yet the final bootstrap
-architecture. Future work should evolve this into the broader backend-agnostic
-bootstrap coordinator described in `ai_instructions/architecture/db_architecture.md`.
+Backend support selection now comes from the centralized bootstrap backend
+policy seam so this factory can stay focused on repository construction.
 """
 
 from __future__ import annotations
 
 from os import PathLike
 
-from src.db.database_adapter import WrongDatabaseAdapter
 from src.db.repositories.base_repository import BaseRepository
-from src.db.repositories.sqlite.event_log_repository import EventLogRepository
-from src.db.sqlite_adapter import SQLiteAdapter
-
-SQLITE_DIALECT = "sqlite"
+from src.db.repositories.bootstrap_backend_policy import (
+    SQLITE_DIALECT,
+    create_event_log_repository,
+)
 
 
 class RepositoryFactory:
@@ -32,6 +28,7 @@ class RepositoryFactory:
         *,
         database_path: str | PathLike[str],
         dialect: str = SQLITE_DIALECT,
+        encryption_key: bytes | None = None,
     ) -> BaseRepository:
         """Create a ready-to-use EventLog repository for the supported dialect.
 
@@ -39,6 +36,8 @@ class RepositoryFactory:
             database_path: File path or ``:memory:`` target for the SQLite DB.
             dialect: Requested database dialect. Only ``"sqlite"`` is currently
                 supported.
+            encryption_key: Optional backend-ready derived key bytes used to
+                open/create the encrypted SQLite backend.
 
         Returns:
             A repository-facing abstraction backed by the selected adapter.
@@ -46,16 +45,17 @@ class RepositoryFactory:
         Raises:
             WrongDatabaseAdapter: If the requested dialect is unsupported.
         """
-        if dialect != SQLITE_DIALECT:
-            raise WrongDatabaseAdapter(
-                f"Unsupported repository dialect {dialect!r}. Only {SQLITE_DIALECT!r} is currently supported."
-            )
-
-        adapter = SQLiteAdapter(database_path)
-        return EventLogRepository(adapter)
+        return create_event_log_repository(
+            database_path=database_path,
+            dialect=dialect,
+            encryption_key=encryption_key,
+        )
 
     @staticmethod
-    def create_in_memory_repository() -> BaseRepository:
+    def create_in_memory_repository(*, encryption_key: bytes | None = None) -> BaseRepository:
         """Create a ready-to-use in-memory repository for tests and similar flows."""
-        return RepositoryFactory.create_event_log_repository(database_path=":memory:")
+        return RepositoryFactory.create_event_log_repository(
+            database_path=":memory:",
+            encryption_key=encryption_key,
+        )
 

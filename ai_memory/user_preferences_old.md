@@ -37,6 +37,7 @@
 - ✅ **Document all mocks** with justification in integration tests
 - ✅ Unit tests can mock more, but still minimize
 - ✅ Integration tests should rarely mock
+- ✅ **Keep test filenames subject-focused** - In `tests/integration/`, prefer the same `test_<subject>.py` naming pattern used in unit tests instead of redundant `_integration` suffixes when folder placement and markers already communicate test type
 - ✅ **Use pytest's conftest.py pattern** for fixtures:
   - `tests/conftest.py` - Global fixtures
   - `tests/unit/conftest.py` - Unit test specific fixtures

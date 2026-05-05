@@ -8,7 +8,7 @@
 
 1. **SAFETY** - No git, read before edit, verify after
 2. **USER TIME** - Every file changed = user must review = expensive
-3. **SMALL PATCHES** - Never change >3 files without discussion
+3. **SMALL PATCHES** - Prefer one coherent decision per change; small-to-medium multi-file edits are acceptable when they apply the same structural fix across direct dependents
 4. **DISCUSS FIRST** - User prefers conversation over action
 
 ---
@@ -44,10 +44,15 @@
 ## SIZE LIMITS (Hard Stop Points)
 
 **STOP and discuss if ANY of:**
-- More than 3 files to modify
+- More than 3 files to modify **and** they require different local decisions
 - More than 300 lines of code changes
 - Touches more than 2-3 components
 - Takes more than 1 focused session (2 hours) of work
+
+**Exception:** A coherent structural propagation may touch more than 3 files when
+the same fix is being applied across direct dependents (for example: removing a
+symbol export and updating all imports/usages). Treat that as one change theme,
+not as forbidden scope creep.
 
 **Core principle**: User prefers 10 small patches over 1 large patch
 
@@ -79,7 +84,7 @@
 - Syncing multiple files based on inference
 - User said "I did X" (past tense)
 - Change scope unclear
-- Affects >3 files
+- Affects >3 files with different local reasoning or different kinds of fixes
 - User's request could be interpreted multiple ways
 
 ### Act immediately when:
@@ -110,11 +115,27 @@
    - Use minimal, focused changes
    - Keep changes logically grouped
    - Preserve existing structure/style
+   - Prefer updating existing rows/entries/lines in place when that preserves the contract; add new rows/lines only when the change truly introduces new information or a new required branch
+   - If multiple project documents repeatedly state a layer boundary or ownership rule, do NOT bypass it with a tactical fix even if the bug is real; move the fix to the owning layer or rethink the patch before proceeding
 
 3. **After editing**:
    - Run get_errors on modified files
    - Fix any errors immediately
    - Report what was changed and why
+
+---
+
+## DOCUMENTATION ABSTRACTION RULES
+
+### Architecture and design docs are NOT implementation files
+
+- Architecture docs should define ownership, boundaries, responsibilities, and cross-component flow.
+- Design docs should define contracts, invariants, validation rules, data shapes, and required sequences.
+- Do **NOT** place copy-paste-ready implementation code in architecture/design docs unless the exact implementation shape is itself a required contract.
+- Prefer bullets, decision tables, sequence descriptions, or clearly labeled pseudocode over real Python implementations.
+- If a code-like example is truly needed, keep it short, explicitly label it as illustrative/current-example/pseudocode, and avoid presenting it as the only acceptable implementation path.
+- Exact schemas, config formats, SQL DDL, or protocol/order requirements may still be documented concretely when precision is the point.
+- Reason: concrete implementation code in design docs locks implementers in too early, encourages copy-paste without thinking, and makes docs stale when code evolves.
 
 ---
 
@@ -137,6 +158,8 @@
 - When in doubt, ASK
 - Log significant decisions in session log
 - Update the session log continuously during the session when meaningful progress happens, not only at the end
+- Treat the session log as the source of truth for what has been done in the current session; update it immediately after each meaningful completed step or new user-confirmed knowledge, not later as a cleanup task
+- Session-log maintenance is continuous background work and is NOT part of the normal queued file-step logic; do it automatically as progress happens
 - Reason: crashes can happen, so progress should be recorded as it happens
 
 **At end of session**:
@@ -207,11 +230,21 @@ When user requests work on multiple files (e.g., "fix all user stories"):
 
 **CRITICAL RULE:** Each user "yes" = permission for EXACTLY ONE file. Permission expires when that file is done.
 
+**Structural propagation exception:** If the requested change is one coherent
+structural fix that must be applied across direct dependents in the same way,
+the change may span multiple files under a single approval. Examples: removing
+an accidental export and updating its imports/tests; renaming one API and
+updating direct usages. Stop and split the work again as soon as different
+files require different design decisions.
+
+**Exception:** Updating the current session log as background maintenance does **not** consume or require separate per-file permission. It should happen automatically while doing the approved work.
+
 **DO NOT:**
 - Assume permission carries over to multiple files
 - Continue to next file without explicit confirmation
 - Interpret "yes" as blanket permission for remaining files
 - Use checklist format in session logs (triggers batch behavior)
+- Add temporary compatibility shims purely to satisfy an artificial one-file boundary when the cleaner structural fix is to update direct dependents in the same change
 
 **Example CORRECT behavior:**
 ```

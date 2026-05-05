@@ -2,15 +2,13 @@
 # Python 3.14
 
 # Application Dependencies
-# (None - using only Python standard library)
-# - tkinter (GUI) - included in Python stdlib
-# - sqlite3 (Database) - included in Python stdlib
+sqlcipher3>=0.6.2  # SQLCipher-backed SQLite binding for encrypted database support
+
+# Standard library modules still used directly by the application:
+# - tkinter (GUI)
+# - sqlite3 (existing plaintext adapter/tests and compatibility paths)
+# - hashlib.pbkdf2_hmac (shared PBKDF2 helper; no extra KDF dependency currently needed)
 
 # For development/testing dependencies, see requirements-test.txt
 
-# NOTE: Security architecture (Session 006) designed database encryption.
-# When implementing encryption, add these dependencies:
-#   pysqlcipher3>=1.0.0   # SQLite with AES-256 encryption
-#   cryptography>=41.0.0  # PBKDF2 key derivation
-# See: ai_instructions/architecture/security_architecture.md
 

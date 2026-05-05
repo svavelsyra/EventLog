@@ -2,7 +2,7 @@
 
 **Project**: Platoon Event Logger  
 **Version**: 1.0.0
-**Last Updated**: 2026-04-28  
+**Last Updated**: 2026-04-30  
 
 ## Domain Model
 
@@ -62,6 +62,31 @@ The application is no longer designed around one generic message-log entry. The 
 - **Filter/search** - for finding specific entries
 - **Export functionality** - for reporting (future)
 
+### Startup and Bootstrap UX
+- `config.ini` is a convenience layer only. It may remember UI state, creation defaults, and last-used bootstrap hints, but it is not security authority.
+- For bootstrap/security-related config, `[DEFAULT]` is the shared inherited fallback layer. Ordinary sections still exist alongside it; technology sections hold remembered target details and may override shared values when needed.
+- Remembered startup hints for an existing database target must stay separate from create-time admin policy inputs for new databases. Example: whether the last-used database needed a key file is bootstrap memory, while whether new databases must use a key file is a creation-time policy/default.
+- Startup must always reach a usable recovery-capable create/select flow, even when remembered bootstrap values are missing or malformed.
+- Startup is technology-first: the user resolves or selects the database technology before backend-specific input fields are finalized.
+- After a technology is selected, the startup UI becomes dynamic and shows only the fields relevant for that technology.
+- In the current SQLite realization, create versus open is inferred from whether the selected target already exists, so the generic startup shell should not expose a separate global new/load selector.
+- Remembered values may prefill the startup UI, but the user must be able to change them or ignore them.
+- Current SQLite/file-path/key-file behavior is a Phase 1 realization of this UX, not the universal rule for all future backends.
+- Emergency `Nollställ` in the startup/unlock path is immediate; it must not require a secondary confirmation dialog or typed confirmation phrase.
+
+### Security Helper and Ownership Design
+- Shared security code should stay small, explicit, and auditable.
+- Shared security helpers are for cross-technology concerns only: generic key-derivation primitives, shared security exceptions, generic credential/file validation, and secure-deletion utilities.
+- Backend-specific security behavior should be owned by the backend that needs it. If SQLite/SQLCipher requires a special salt contract, key formatting rule, metadata lookup, or unlock verification step, that belongs with the SQLite implementation rather than in the shared helper layer.
+- Startup/presenter code may collect secrets and surface generic user-facing failures, but it should call into security and backend-owned logic rather than containing backend-specific cryptographic rules itself.
+
+### Password and Credential Policy
+- Password policy is intentionally minimal.
+- The administrator-configured minimum password length is a policy input, not a hard-coded universal rule baked into every low-level helper.
+- The design does not require character-composition rules such as uppercase, digits, or symbols.
+- Low-level helpers should reject structurally invalid inputs and clearly abusive bounds, but they should not silently enforce narrow recommended ranges where the caller or administrator is expected to own the policy decision.
+- Generic key derivation should remain portable across future backends by accepting caller-supplied policy inputs such as salt, iterations, and output-length expectations where appropriate; backend-owned wrappers can then apply technology-specific rules on top.
+
 ### Entry Form Fields
 All fields from the MessageLogEntry entity, with:
 - Auto-populated logged time
@@ -75,10 +100,16 @@ All fields from the MessageLogEntry entity, with:
 - **communication_entries** - communication log entries
 - **event_entries** - operational event log entries
 - **personnel_entries** - personnel status/history entries
+- **file_attachments** - generic attachments whose content is stored inside the encrypted database in Phase 1
 - **structured_reports** - report templates attached to events
 - **communication_systems** / **channel_designations** / **system_capabilities_config** - communication configuration
 - **report_templates** / **categories** / **user_preferences** - runtime configuration and user-managed metadata
 - **settings** - low-level repository settings such as the edited-flag grace period in seconds
+
+### Attachment Storage Policy
+- Phase 1 attachment content is stored inside the encrypted database together with its metadata.
+- Plaintext filesystem attachment directories are not part of the approved secure design.
+- Future support for large attachments is optional future work and, if ever approved, must use separately encrypted external storage rather than normal readable files.
 
 ### Persistence Layer Design
 

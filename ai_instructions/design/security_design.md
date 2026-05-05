@@ -1,7 +1,7 @@
 # Security Design (AI)
 
 **Domain Models & Configuration**  
-**Last Updated**: 2026-04-22
+**Last Updated**: 2026-04-30
 
 ## Overview
 
@@ -20,69 +20,98 @@ Security design details for database encryption, key management, and secure dele
 
 ## Security Configuration Schema
 
-**Architecture Decision**: Database bootstrap settings in **config.ini** [DB] section.
+**Architecture Decision**: Remembered bootstrap hints and creation defaults live in `config.ini`, using `[DEFAULT]` as the shared inherited fallback for bootstrap/security-related values and one section per technology for technology-owned remembered target details plus optional overrides.
 
-**Reasoning**: 
-- Bootstrap problem: Need to know database path and whether key file required BEFORE opening database
-- Cannot open database to read config if we don't know HOW to open it
-- config.ini is trusted local file (same security as database file)
-- Other settings are defaults/UX helpers, not security enforcement
+**Reasoning**:
+- Startup benefits from remembering the last-used database technology/target and related unlock hints
+- The application must still be able to start when that remembered data is missing or malformed
+- `config.ini` is untrusted convenience state, not security authority
+- Other settings here are creation defaults, administrator-controlled policy inputs, or UX helpers, not security enforcement
+
+### Policy Ownership Philosophy
+
+- The application should guide users toward sensible and safer choices, but it should not hard-code one universal workflow that ignores operational reality.
+- Administrators define the allowed policy envelope for new database creation, such as minimum password length, key-file-related minimums/limits, and which database technologies are allowed to be selected.
+- Current shared/create-time inputs belong in `[DEFAULT]`, but that does not remove ordinary sections such as `[Logging]`, `[Application]`, or technology sections that may override shared values when needed.
+- Operators then create a database within that allowed envelope.
+- Once a database is created, the effective rules for that database belong to that database's own authoritative state, not to later changes in `config.ini`.
+- This means an administrator may create a database with a stricter or simpler rule set first, and operators who later use that database are constrained by the database-owned rules rather than by whatever convenience defaults happen to be in local config afterward.
+- This is also a realistic-threat-model rule: local config and Python source can be changed by anyone with machine access, so only protected database state can meaningfully hold authoritative security rules after creation and unlock.
+- Result: the application guides, administrators define creation-time policy, operators choose within that policy, and the created database becomes the authoritative source for its own effective rules.
+- If a future technology needs a different concept than `min_password_length` or `require_key_file_for_creation`, that rule should be added as backend-owned or technology-scoped policy rather than forcing every technology into one fake global truth.
+
+### Security Boundary Design Rule
+
+- Shared security design should stay small, explicit, and audit-friendly.
+- Shared security helpers should contain only cross-technology concerns such as generic KDF primitives, generic credential/file validation, shared security exceptions, and secure-deletion behavior.
+- Backend-specific security behavior belongs with the backend that owns it. If SQLite/SQLCipher needs a particular salt contract, key formatting rule, metadata source, or unlock verification behavior, that design belongs with the SQLite implementation rather than in the shared security helper layer.
+- Startup/presenter/factory code may orchestrate the sequence, but they should not silently absorb backend-specific cryptographic rules.
 
 ### Config.ini Settings
 
 **Location**: Application root directory
 
-**SECURITY NOTE**: Config.ini is **completely unprotected**. Any attacker with physical access can read/modify it. Python source code is also readable, so code-based limits provide no real security. Config values here are either:
-1. **Bootstrapping info** (needed to open DB)
-2. **Defaults for creating NEW databases** (actual values stored in DB header)
-3. **UX conveniences** (not security enforcement)
+**SECURITY NOTE**: `config.ini` is **completely unprotected**. Any attacker with physical access can read/modify it. Python source code is also readable, so code-based limits provide no real security. Config values here are either:
+1. **Bootstrap memory** used to prefill the startup UI
+2. **Defaults for creating NEW databases** (actual values stored in DB/SQLCipher state)
+3. **Administrator-controlled policy inputs** such as minimum password length, key-file-related limits, and allowed database technologies for creation-time validation
+4. **UX conveniences** (not security enforcement)
 
-**DB Section** (Bootstrap - required to open database):
+**Default Section** (Shared inherited fallback values for bootstrap/security-related settings):
 ```ini
-[DB]
-# Database file path (for THIS instantiated database)
-db_file_path = eventlog.db
+[DEFAULT]
+# Remembered last-used database technology / selected startup technology
+db_type = sqlite
 
-# Whether key file required to unlock THIS database instance (set during first setup)
-# NOTE: This is about THIS specific database, not a general setting
-require_key_file = false  # or "true"
-```
+# Whether NEW databases must use a key file at creation time.
+require_key_file_for_creation = false
 
-**Security Section** (Defaults for creating NEW databases):
-```ini
-[Security]
 # Minimum password length when creating database (UI validation helper)
-# NOT cryptographic enforcement - just prevents user mistakes
 min_password_length = 8
 
 # Secure deletion passes (operational default)
-# Attacker with physical access could change this, but won't bother anyway
 secure_delete_passes = 3
 
 # PBKDF2 iterations DEFAULT for NEW databases
-# When creating a new database, this value is used
-# Actual iterations are stored IN THE DATABASE HEADER (SQLCipher)
-# Opening existing database reads iterations from DB, not from config.ini
 kdf_iterations = 100000
+```
+
+**Technology Section** (Remembered startup hints plus optional overrides; section shape may differ by technology):
+```ini
+[sqlite]
+# Remembered last-used SQLite database target/path for startup convenience
+database_path = eventlog.db
+
+# Whether the remembered last-used SQLite database used key-file mode
+# NOTE: This is startup memory, not security authority
+require_key_file = false  # or "true"
+
+# Optional SQLite-specific override of a shared DEFAULT value when needed
+# min_password_length = 10
 ```
 
 **REMOVED SETTINGS** (Provide no real security):
 - ~~`max_login_attempts`~~: REMOVED - Attacker can modify code/config to bypass. Provides no security against competent attacker. Incompetent attacker won't get past encryption anyway.
 
 **Important Notes**:
-- **`kdf_iterations` in config.ini**: Default for creating NEW databases only. When database is created, this value is written to the SQLCipher database header. When opening existing database, iterations are read FROM THE DATABASE, not from config.ini.
-- **`min_password_length`**: UI validation helper when creating database. Not cryptographic enforcement - just prevents user fat-fingering during setup.
-- **`secure_delete_passes`**: Operational setting for convenience. Attacker with physical access has access to entire system anyway.
+- **`kdf_iterations` in config.ini**: Default for creating NEW databases only. When a database is created, this value is written into SQLCipher-managed state. Opening an existing database must not treat config.ini as authoritative.
+- **`min_password_length`**: UI validation helper when creating a NEW database. Not cryptographic enforcement - just prevents user mistakes during setup.
+- **`secure_delete_passes`**: Operational setting for convenience. Attacker with physical access has access to the entire system anyway.
+- **Bootstrap memory**: Missing or malformed remembered values must not prevent startup. They only affect how much the startup UI can prefill automatically.
+- **Allowed technology list / credential policy in config**: These are creation-time policy inputs and convenience guidance. They can shape what the create flow allows on this machine, but they are not retroactive authority over an already-created database.
+- **Key-file split**: the selected technology section's `require_key_file` is remembered startup memory for an already-created target, while `[DEFAULT].require_key_file_for_creation` is the create-time admin policy input for new databases.
+- **Current-phase scope**: settings such as `require_key_file_for_creation` and `min_password_length` are current shared/create-time inputs, not a promise that all present or future technologies will use exactly those same policy fields.
 
 ---
 
 ### security_config Table (Database)
 
-**Purpose**: Store security-related configuration flags and settings (EXCEPT require_key_file which is in config.ini for bootstrapping).
+**Purpose**: Store security-related configuration flags and settings that are authoritative after the encrypted database is available.
 
-**DESIGN PHILOSOPHY**: 
-- **Settings stored in DATABASE** = Actually matter for security (read by encrypted DB)  
-- **Settings in config.ini** = Defaults for creating NEW databases OR bootstrap info needed to OPEN the database
+**DESIGN PHILOSOPHY**:
+- **Settings stored in DATABASE** = Actually matter for security after unlock and are authoritative for the current database
+- **Settings in config.ini** = Defaults for creating NEW databases or remembered startup hints used to prefill recovery-capable UI
+- **Practical consequence** = Admin policy may shape what can be created next, but once a database exists, that database's own protected state is the only meaningful place to keep its effective rules
 
 **Schema**:
 ```sql
@@ -108,8 +137,10 @@ CREATE INDEX idx_security_config_key ON security_config(key);
 - ~~`max_login_attempts`~~: REMOVED - Attacker can bypass by modifying code. Provides no security.
 - ~~`kdf_iterations`~~: REMOVED from table - Stored in SQLCipher database header instead (cannot be tampered with)
 
-**Bootstrap Settings** (In config.ini, not database):
-- `require_key_file`: Needed to know HOW to open database (bootstrap problem - can't read DB to know if key file needed)
+**Bootstrap Memory Settings** (In config.ini, not database):
+- `[DEFAULT].db_type`: Remembered/selected database technology for startup prefill
+- technology-section target field such as `[sqlite].database_path`: Remembered last-used target/path for startup prefill
+- technology-section `require_key_file`: Remembered last-used unlock mode hint for startup prefill
 
 **Security Settings NOT Stored** (Never stored anywhere):
 - ~~`last_key_file_path`~~: **Never stored** - would leak key file location if device captured. Steganographic security requires key file to remain unknown.
@@ -132,55 +163,46 @@ INSERT INTO security_config (key, value, description) VALUES
 **Config.ini Examples**:
 ```ini
 # Operational mode (maximum security)
-[DB]
-db_file_path = eventlog.db
-require_key_file = true
-
-[Security]
-# Defaults for NEW databases
+[DEFAULT]
+db_type = sqlite
+require_key_file_for_creation = true
 min_password_length = 12
 secure_delete_passes = 3
 kdf_iterations = 100000
 
-# Training mode (simplified)
-[DB]
-db_file_path = eventlog_training.db
-require_key_file = false
+[sqlite]
+database_path = eventlog.db
+require_key_file = true
 
-[Security]
-# Defaults for NEW databases
+# Training mode (simplified)
+[DEFAULT]
+db_type = sqlite
+require_key_file_for_creation = false
 min_password_length = 8
 secure_delete_passes = 1
-kdf_iterations = 100000  # Minimum enforced
+kdf_iterations = 100000  # Current recommended default
+
+[sqlite]
+database_path = eventlog_training.db
+require_key_file = false
 ```
 
 **Validation**:
-- `min_password_length`: Must be >= 8
+- `min_password_length`: Must be >= 0
 - `secure_delete_passes`: Must be >= 1, <= 10
-- `kdf_iterations` (in config.ini): Must be >= 100000 (lower values too weak)
+- `kdf_iterations` (in config.ini): Must be a positive integer; `100000` remains the current recommended default for new databases
 
 **Config.ini Validation**:
-- `require_key_file`: Must be "true" or "false" (case-insensitive, parsed as boolean)
-- `db_file_path`: Must be non-empty string
+- `[DEFAULT].db_type` and the selected technology section's remembered target fields are startup hints, not application-start prerequisites
+- `[DEFAULT].require_key_file_for_creation` is a create-time policy/default input, not remembered startup memory for existing databases
+- Missing remembered bootstrap values => startup falls back to manual create/select flow
+- Partially malformed remembered bootstrap values => preserve usable values, discard invalid ones, keep startup UI usable
+- Completely unusable remembered bootstrap values => ignore them and fall back to manual create/select flow
 
 **Access Pattern**:
-```python
-def get_security_config(key: str, default: str = None) -> str:
-    """Get security configuration value"""
-    cursor.execute("SELECT value FROM security_config WHERE key = ?", (key,))
-    row = cursor.fetchone()
-    return row[0] if row else default
-
-def set_security_config(key: str, value: str) -> None:
-    """Set security configuration value"""
-    cursor.execute("""
-        INSERT INTO security_config (key, value, last_modified)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(key) DO UPDATE SET
-            value = excluded.value,
-            last_modified = CURRENT_TIMESTAMP
-    """, (key, value))
-```
+- Read by key, returning a caller-supplied default when the key is absent.
+- Write by key using an upsert-style update so the key remains unique and `last_modified` changes on every update.
+- This is an authoritative encrypted-database configuration surface after unlock; callers should not mirror these values back into `config.ini` unless the value is explicitly part of remembered bootstrap memory.
 
 ---
 
@@ -195,71 +217,31 @@ def set_security_config(key: str, value: str) -> None:
 - Binary: Any file readable as binary
 
 **Restrictions**:
-- **Minimum size**: 1 KB (small files provide weak salt)
-- **Maximum size**: 100 MB (reading huge files slows startup)
+- **Recommended minimum size**: 1 KB (smaller files may still work technically, but are discouraged as a quality recommendation rather than a universal protocol rule)
+- **Maximum size**: 100 MB (reading huge files slows startup and creates avoidable abuse/performance risk)
 - **Must be readable**: User must have read permission
 
-**Validation**:
-```python
-def validate_and_open_key_file(file_path: str) -> tuple[BinaryIO | None, str]:
-    """
-    Validate key file and open it for reading
-    
-    Opening the file:
-    - Verifies read access (file lock acquired on most OS)
-    - Ensures file is "owned and readable" by us
-    - Most OS will restrict writes while we hold read lock
-    
-    Returns:
-        (file_handle, error_message)
-        - file_handle: Open binary file if valid, None if invalid
-        - error_message: Empty string if valid, error description if invalid
-    """
-    # Check existence
-    if not os.path.exists(file_path):
-        return (None, "Fil finns inte")
-    
-    # Check it's a file
-    if not os.path.isfile(file_path):
-        return (None, "Måste vara en fil, inte katalog")
-    
-    # Check size before opening (avoid opening huge files)
-    try:
-        file_size = os.path.getsize(file_path)
-    except OSError as e:
-        return (None, f"Kan inte läsa filstorlek: {e}")
-    
-    if file_size < 1024:  # 1 KB
-        return (None, "Fil för liten (minimum 1 KB)")
-    
-    if file_size > 100 * 1024 * 1024:  # 100 MB
-        return (None, "Fil för stor (maximum 100 MB)")
-    
-    # Attempt to open file (validates read access + acquires file lock)
-    try:
-        f = open(file_path, 'rb')
-        return (f, "")  # Success - caller must close file
-    except PermissionError:
-        return (None, "Kan inte läsa fil (behörighet saknas)")
-    except OSError as e:
-        return (None, f"Kan inte öppna fil: {e}")
-```
+**Validation Contract**:
+- Input: a caller-supplied file path.
+- Checks, in order (Or maybe try open() and catch exceptions, then we implicitly knows several of these checks. The exact implementation can vary, but the validation must cover these concerns):
+  1. path exists
+  2. path is a file, not a directory
+  3. file size can be read
+  4. file size does not exceed the configured abuse/performance cap
+  5. file can be opened for binary reading
+- Success result:
+  - caller receives readable binary content or an opened readable handle, depending on the helper shape chosen during implementation
+  - caller is responsible for closing any opened handle
+- Failure result:
+  - caller receives a clear, user-mappable validation failure without exposing unrelated internal details
+- Design rule:
+  - keep the helper generic to file usability and abuse bounds
+  - backend-specific interpretation of the file contents belongs in the backend-owned security path
 
-**Usage**:
-```python
-# Caller must close file when done
-file_handle, error = validate_and_open_key_file(user_selected_path)
-if file_handle is None:
-    show_error(error)
-    return
-
-# File is open and locked - read it
-try:
-    key_data = file_handle.read()
-    # Use key_data for key derivation
-finally:
-    file_handle.close()  # Release lock
-```
+**Usage Shape**:
+- startup or create/unlock orchestration requests validation of the selected file
+- on failure, UI maps the failure to a user-visible message and remains in the recovery-capable flow
+- on success, the validated file content is passed into backend-owned salt/key preparation logic
 
 **Security Considerations**:
 - **File modification**: If key file is edited (e.g., photo rotated), key changes, database becomes inaccessible
@@ -272,9 +254,18 @@ finally:
 
 ### Password Policy
 
-**Minimum Length**: 8 characters (configurable via `min_password_length`)
+**Minimum Length**: Administrator-configured via `min_password_length`
 
 **Recommended**: 12+ characters for operational mode
+
+**Allowed Credential Combinations**:
+- no password, no key file
+- password only
+- key file only
+- password + key file
+
+Which combinations are allowed should be decided by administrator-controlled creation policy and by backend support for the selected technology.
+Other technologies may have different allowed combinations or different credential types entirely, but the architecture should support that flexibility without hard-coding assumptions about composition rules or required credential types.
 
 **No Complexity Requirements** (Phase 1):
 - No uppercase/lowercase/digit/symbol requirements
@@ -291,23 +282,17 @@ finally:
 - Suggestions for strong passwords
 - Password manager integration
 
-**Validation**:
-```python
-def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
-    """
-    Validate password meets requirements
-    
-    Returns:
-        (is_valid, error_message)
-    """
-    if len(password) < min_length:
-        return (False, f"Lösenord måste vara minst {min_length} tecken")
-    
-    # Phase 1: Only length check
-    # Phase 2: Add strength estimation here
-    
-    return (True, "")
-```
+**Validation Contract**:
+- Input: user-entered password plus administrator-controlled `min_password_length`.
+- Empty password may be allowed if the selected credential combination is permitted by the current admin policy and the selected backend supports that combination.
+- This may include convenience/training-oriented setups such as key-file-only mode or even no-password/no-key-file mode when explicitly allowed.
+- Reject passwords shorter than the configured minimum.
+- Do not require uppercase/lowercase/digit/symbol composition rules in Phase 1.
+- Return a caller-visible success/failure shape that higher layers can map to UI feedback.
+
+**Guidance vs Enforcement**:
+- The GUI should indicate what is allowed, what is recommended, and which choices provide weak or no meaningful protection.
+- The application should help users make better choices, but actual enforcement should come from the configured/admin-defined rule set and backend support rather than from hidden hard-coded assumptions in the UI.
 
 ---
 
@@ -322,9 +307,11 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 - Database corrupted: `"Databasen är skadad och kan inte öppnas."`
 
 **Key File Selection Errors**:
-- File too small: `"Fil för liten (minimum 1 KB)"`
 - File too large: `"Fil för stor (maximum 100 MB)"`
 - Not a file: `"Måste vara en fil, inte katalog"`
+
+**Key File Selection Warnings / Guidance**:
+- Very small files may be discouraged by UI guidance, but they are not a universal protocol error if the selected backend accepts them.
 
 **Password Errors**:
 - Too short: `"Lösenord måste vara minst {min} tecken"`
@@ -342,10 +329,28 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 - If we need to Nollställ (clear database + key file), we can only clear one database safely.
 - Cannot know key files for unopened databases.
 - Multiple database support would create security vulnerability.
+- Single-database scope does **not** mean the startup UI is permanently SQLite-shaped; technology selection still happens first and the UI then adapts to the selected technology.
 
-### Key Entry Dialog - Three Cases
+### Startup / Unlock Dialog Flow
 
-**Case 1: First Run (No Database Exists)**
+The startup UI must always provide a recovery-capable path. Remembered values from `config.ini` are prefill hints only.
+
+### Generic Startup Shell Contract
+
+These rules are generic and apply regardless of which backend technology is selected:
+- Startup begins by resolving or selecting the database technology.
+- Remembered config values may prefill the startup UI, but they are not authoritative.
+- Once the technology is selected, the UI becomes dynamic and shows only the fields relevant for that technology.
+- The selected technology defines which target fields, file pickers, credential inputs, and readiness checks are required.
+- Missing or malformed remembered bootstrap memory must fall back to a usable create/select recovery path.
+- The create flow should validate the operator's selected setup against admin-defined policy for allowed technologies and credential combinations.
+- The GUI should clearly distinguish between what is allowed and what is merely recommended.
+
+### Current SQLite/SQLCipher Realization
+
+The detailed dialog layouts below are **current-phase SQLite/SQLCipher examples**, not the universal startup UI contract for all future backends.
+
+**Case 1: Current SQLite/SQLCipher Example - Create New Database**
 
 **Layout**:
 ```
@@ -370,22 +375,25 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 ```
 
 **Behavior**:
-- No database file exists yet
-- User must choose: key file + password OR password only
-- If key file field left empty OR checkbox checked → password-only mode
+- No remembered database target exists, or the user intentionally starts from an empty create/select flow
+- Startup UI begins with safe defaults or empty selections
+- After the user selects the current SQLite technology, the SQLite/SQLCipher-specific create fields below become relevant
+- For SQLite, create versus unlock is inferred from whether the selected target already exists; the generic startup shell must not show a separate global create/open mode selector
+- User may choose no credentials, password only, key file only, or key file + password, subject to current admin policy and SQLite support
 - Password confirmation required (must match)
 - [Skapa] button creates new encrypted database
-- Saves `require_key_file` flag to config.ini (true if key file provided, false otherwise)
+- On success, save remembered startup hints in `config.ini` so the next startup can prefill the UI
 
 **Validation**:
-- Password and confirmation must match
-- Password must meet minimum length
+- Password and confirmation must match when a password is being used
+- Password must meet the configured minimum when a password is required by the selected setup
 - If key file provided: Validate file exists, readable, size limits
+- If the selected setup is allowed but weak, the UI may warn or guide without blocking
 - On success: Create encrypted database with entered credentials
 
 ---
 
-**Case 2: Existing Database (Unlock)**
+**Case 2: Current SQLite/SQLCipher Example - Existing Database Unlock**
 
 **Layout**:
 ```
@@ -393,8 +401,8 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 │  EventLog - Lås upp                      │
 ├──────────────────────────────────────────┤
 │                                           │
-│  Nyckelfil:                               │ <- Only shown if require_key_file=true
-│  [/path/to/file.jpg          ] [Välj...] │ <- in config.ini
+│  Nyckelfil:                               │ <- Only shown if remembered/selected require_key_file=true
+│  [/path/to/file.jpg          ] [Välj...] │ <- user provides path at unlock time, not persisted
 │                                           │
 │  Lösenord:                                │
 │  [************************  ]             │ <- Password entry (always shown)
@@ -406,10 +414,12 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 ```
 
 **Behavior**:
-- Database exists, config.ini exists
-- Read `require_key_file` from config.ini
-- If `require_key_file=true`: Show key file picker (required)
-- If `require_key_file=false`: Hide key file picker (password only)
+- Remembered startup hints may preselect database technology/path and whether key-file mode was used last time
+- User may keep the prefilled values, change them, or manually select another database target
+- These controls are shown because the currently selected technology is SQLite/SQLCipher; another backend may use different fields entirely
+- For SQLite, unlock mode is reached when the selected target already exists rather than by a separate operator-picked global mode toggle
+- If the selected or remembered target uses key-file mode: Show key file picker (required)
+- If the selected or remembered target does not use key-file mode: Hide key file picker (password only)
 - **[Nollställ] button**: Allows emergency data destruction without login (see below)
 - Password field accepts any characters (Unicode supported)
 - Escape key disabled (must click Avbryt to exit)
@@ -433,43 +443,38 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 
 ---
 
-**Case 3: Emergency Nollställ (No Login Required)**
+**Case 3: Malformed Remembered Bootstrap Memory**
+
+**Behavior**:
+- Startup still reaches the create/select database UI
+- Usable remembered values may still prefill the UI
+- Malformed remembered values are discarded rather than treated as authoritative
+- The application must not crash or become unusable merely because bootstrap memory is stale or malformed
+- UX details for how warnings are surfaced can evolve later, but recovery path is mandatory
+- In the current SQLite/SQLCipher path, that may mean clearing remembered path or key-file-mode hints while still letting the user select SQLite manually and continue
+
+---
+
+**Case 4: Emergency Nollställ (No Login Required)**
 
 **Critical Feature**: User must be able to destroy data even if password/key forgotten or device about to be captured.
 
 **Trigger**: [Nollställ] button on unlock dialog (Case 2)
 
-**Confirmation Dialog**:
-```
-┌──────────────────────────────────────────┐
-│  ⚠️  VARNING: NOLLSTÄLL                  │
-├──────────────────────────────────────────┤
-│                                           │
-│  Detta kommer PERMANENT radera:           │
-│  • Databasen och alla loggar              │
-│  • Alla loggfiler                         │
-│  • Nyckelfil (om tillgänglig)             │
-│                                           │
-│  INGEN INLOGGNING KRÄVS                   │
-│  DATA KAN EJ ÅTERSTÄLLAS                  │
-│                                           │
-│  Skriv "RADERA" för att bekräfta:         │
-│  [____________________]                   │
-│                                           │
-│           [Avbryt]      [NOLLSTÄLL]       │
-│                                           │
-└──────────────────────────────────────────┘
-```
+**Interaction Model**:
+- `Nollställ` is an immediate emergency action in the unlock/startup path.
+- No secondary confirmation dialog, typed phrase, or extra approval step is allowed in this emergency flow.
+- Rationale: in the intended threat scenario, the operator may have only seconds and must be able to reset immediately and return attention to the situation.
 
 **Behavior**:
-- User must type "RADERA" (exact match, case-sensitive)
-- [NOLLSTÄLL] button enabled only when "RADERA" entered correctly
-- On confirmation:
-  1. Secure delete database file (if exists)
-  2. Secure delete all log files
-  3. Secure delete key file (if path in config.ini and writable)
-  4. Delete config.ini (removes require_key_file flag)
-  5. Show success: "NOLLSTÄLLD!"
+- When the user triggers `Nollställ`, reset begins immediately.
+- Execution order:
+  0. Clear UI state.
+  1. Lock DB.
+  2. Secure delete database file (if exists)
+  3. Secure delete all log files
+  4. Delete config.ini (removes remembered bootstrap memory such as `require_key_file`)
+  6. Show success: "NOLLSTÄLLD OK!" or "MISSLYCKADES NOLLSTÄLLA!" (+ Sanitized list of failures)
   6. Exit application (user restarts for fresh setup)
 
 **Security Benefit**: Even if password/key forgotten or device captured, operator can destroy all data without authentication.
@@ -484,49 +489,25 @@ def validate_password(password: str, min_length: int = 8) -> tuple[bool, str]:
 
 **Algorithm**: Overwrite with random data, multiple passes
 
-**Implementation** (`src/security/secure_delete.py`):
-```python
-import os
-import secrets
-
-def secure_delete_file(file_path: str, passes: int = 3) -> bool:
-    """
-    Securely delete file with overwrite
-    
-    Args:
-        file_path: Path to file to delete
-        passes: Number of overwrite passes
-    
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        if not os.path.exists(file_path):
-            return False
-        
-        file_size = os.path.getsize(file_path)
-        
-        with open(file_path, 'r+b') as f:
-            for pass_num in range(passes):
-                f.seek(0)
-                # Write random data
-                f.write(secrets.token_bytes(file_size))
-                f.flush()
-                os.fsync(f.fileno())  # Force write to disk
-        
-        # Finally, delete file
-        os.remove(file_path)
-        return True
-        
-    except (IOError, OSError, PermissionError):
-        # Best effort - continue even if fails
-        return False
-```
+**Implementation Contract** (`src/security/secure_delete.py`):
+- Input: file path plus overwrite-pass count.
+- Sequence:
+  1. confirm the file exists
+  2. determine file size
+  3. overwrite the file contents for the requested number of passes
+  4. flush/sync best effort between passes
+  5. delete the file
+- Return shape:
+  - boolean success/failure, with failure treated as best-effort rather than fatal to the whole reset flow
+- Design rule:
+  - exact helper shape may vary, but the behavior must remain best-effort, local-only, and safe to call repeatedly
 
 **Files to Secure Delete** (in Nollställ):
 1. Database file: `eventlog.db`
 2. Log files: `logs/*.log*`
-3. Key file: If path known and writable
+
+**Files NOT Automatically Deleted**:
+- External key files selected by the user during bootstrap/unlock. A key-file path may point to any user-owned file, so `Nollställ` must not assume the app owns it.
 
 **Execution Order**:
 1. Log attempt (before log deletion for debugging)
@@ -535,8 +516,6 @@ def secure_delete_file(file_path: str, passes: int = 3) -> bool:
 4. Delete database file
 5. Overwrite log files
 6. Delete log files
-7. Overwrite key file (best effort)
-8. Delete key file (best effort)
 
 **Error Handling**:
 - Continue on error (don't fail entire Nollställ if one file fails)
@@ -551,73 +530,53 @@ def secure_delete_file(file_path: str, passes: int = 3) -> bool:
 
 **Standard**: PBKDF2-HMAC-SHA256
 
-**Iteration Count**: 100,000 (configurable via `kdf_iterations`)
+**Iteration Count**: Caller-supplied, typically sourced from creation defaults for new databases or backend-authoritative metadata for existing databases
 
-**Why 100,000 Iterations**:
+**Why 100,000 Iterations as the Current Default**:
 - ~100ms on typical laptop (acceptable startup delay)
 - OWASP recommendation: minimum 100,000 for PBKDF2-SHA256
 - Higher is better (slows brute-force) but impacts startup time
 
-**Salt Generation**:
-- **With key file**: SHA-256 hash of file contents
-- **Without key file**: Hardcoded salt `b'EventLog-Default-Salt-v1'`
+**Shared Primitive Contract**:
+- password is encoded as UTF-8
+- salt is caller-supplied
+- iteration count is caller-supplied
+- output length is caller-supplied
+
+**Backend-Owned Responsibilities**:
+- decide how salt is obtained for that backend
+- decide whether key-file bytes are hashed first or otherwise transformed
+- decide the output length expected by that backend
+- decide where authoritative iteration values come from for existing databases
 
 **Key Rotation** (Phase 2):
 - Change salt version: `b'EventLog-Default-Salt-v2'`
 - Migration tool re-derives keys with new salt
 - Requires old password to decrypt, new password to re-encrypt
 
-**Implementation**:
-```python
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-import hashlib
+**Shared Primitive Contract**:
+- Input:
+  - password string
+  - caller-supplied salt bytes
+  - caller-supplied iteration count
+  - caller-supplied output length
+- Output:
+  - deterministic derived key bytes for the same exact inputs
+- Required behavior:
+  - encode password as UTF-8
+  - use PBKDF2-HMAC-SHA256
+  - reject structurally invalid values such as non-positive lengths or non-positive iterations
+  - allow caller/backend policy to choose the actual recommended iteration value
+- Design rule:
+  - this helper stays backend-agnostic and must not silently inject SQLite-owned salt or output rules
 
-def derive_encryption_key(
-    password: str,
-    key_file_path: str | None = None,
-    iterations: int = 100000
-) -> bytes:
-    """
-    Derive 256-bit encryption key from password and optional key file
-    
-    Args:
-        password: User password
-        key_file_path: Optional path to key file
-        iterations: PBKDF2 iteration count (minimum 100000 enforced)
-    
-    Returns:
-        32-byte key for AES-256
-    
-    Raises:
-        ValueError: If iterations < 100000 (security minimum)
-    """
-    # Enforce minimum iterations (OWASP recommendation)
-    if iterations < 100000:
-        raise ValueError(f"KDF iterations must be >= 100000 (got {iterations})")
-    
-    # Enforce maximum iterations (practical limit)
-    if iterations > 10000000:
-        raise ValueError(f"KDF iterations must be <= 10000000 (got {iterations})")
-    
-    # Determine salt
-    if key_file_path:
-        with open(key_file_path, 'rb') as f:
-            file_data = f.read()
-        salt = hashlib.sha256(file_data).digest()
-    else:
-        salt = b'EventLog-Default-Salt-v1'
-    
-    # Derive key
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,  # 256 bits
-        salt=salt,
-        iterations=iterations,
-    )
-    
-    return kdf.derive(password.encode('utf-8'))
-```
+**Current SQLite/SQLCipher Example**:
+- password-only mode uses the current SQLite-owned default salt contract
+- key-file mode hashes the key-file bytes with SHA-256 before using the result as salt
+- SQLite currently requests a 32-byte derived key
+- SQLite then passes that derived key into its own readiness/open flow
+
+This is current backend-owned behavior, not the permanent generic KDF contract.
 
 ---
 
@@ -628,29 +587,10 @@ def derive_encryption_key(
 **Location**: `src/db/repositories/sqlite_eventlog_repository.py`
 
 **Pattern**:
-```python
-from pysqlcipher3 import dbapi2 as sqlite
-
-class SQLiteEventLogRepository(EventLogAdapter):
-    def __init__(self, db_path: str, encryption_key: bytes):
-        self.db_path = db_path
-        self.encryption_key = encryption_key
-        self._connect()
-    
-    def _connect(self):
-        self.connection = sqlite.connect(self.db_path)
-        
-        # Set encryption key
-        self.connection.execute(f"PRAGMA key='{self.encryption_key.hex()}'")
-        
-        # Verify key is correct (will fail if wrong key)
-        try:
-            self.connection.execute("SELECT count(*) FROM sqlite_master")
-        except sqlite.DatabaseError:
-            raise ValueError("Invalid encryption key")
-        
-        self.cursor = self.connection.cursor()
-```
+- open SQLCipher-backed connection using the selected SQLite target
+- apply the backend-owned key/open command immediately after connection
+- run a lightweight verification query to confirm the key is valid
+- only after successful verification does normal repository work continue
 
 **Key Points**:
 - Import `pysqlcipher3` not `sqlite3`
@@ -666,61 +606,16 @@ class SQLiteEventLogRepository(EventLogAdapter):
 
 **Location**: `src/security/secure_delete.py`
 
-**Implementation**:
-```python
-import os
-import secrets
+**Implementation Contract**:
+- file deletion remains best-effort, not guaranteed forensic erasure
+- single-file helper overwrites and deletes one file path
+- directory helper iterates ordinary files and applies the single-file helper to each one
+- missing/inaccessible files return failure information to the caller without aborting the whole reset sequence
 
-def secure_delete_file(file_path: str, passes: int = 3) -> bool:
-    """
-    Best-effort secure file deletion
-    
-    Args:
-        file_path: Path to file to securely delete
-        passes: Number of overwrite passes (default 3)
-    
-    Returns:
-        True if successful, False otherwise
-        
-    Note: File system journaling may keep copies.
-          This is "best effort" not "guaranteed secure".
-    """
-    try:
-        if not os.path.exists(file_path):
-            return False
-        
-        file_size = os.path.getsize(file_path)
-        
-        with open(file_path, 'r+b') as f:
-            for _ in range(passes):
-                f.seek(0)
-                f.write(secrets.token_bytes(file_size))
-                f.flush()
-                os.fsync(f.fileno())  # Force write to disk
-        
-        os.remove(file_path)
-        return True
-        
-    except (IOError, OSError, PermissionError):
-        # Best effort - continue even if fails
-        return False
-
-def secure_delete_directory(dir_path: str) -> None:
-    """Securely delete all files in directory"""
-    for file in os.listdir(dir_path):
-        file_path = os.path.join(dir_path, file)
-        if os.path.isfile(file_path):
-            secure_delete_file(file_path)
-```
-
-**Usage**:
-```python
-# In Nollställ handler
-secure_delete_file('eventlog.db')
-secure_delete_directory('logs/')
-if key_file_path:
-    secure_delete_file(key_file_path)
-```
+**Usage Shape**:
+- reset flow calls the single-file helper for the database file
+- reset flow calls the directory helper for logs
+- reset flow attempts best-effort deletion of reachable key material if a path is known
 
 ---
 
@@ -728,54 +623,32 @@ if key_file_path:
 
 ### Factory with Encryption Key
 
+This subsection shows the **current SQLite/SQLCipher-oriented factory example**.
+
+The generic rule is:
+- startup resolves or confirms a technology-specific target first
+- backend-specific readiness happens next
+- repository creation happens only after that selected target is ready
+
 **Location**: `src/db/repositories/repository_factory.py`
 
-**Implementation**:
-```python
-from src.db.adapters.eventlog_adapter import EventLogAdapter
-from src.db.repositories.sqlite_eventlog_repository import SQLiteEventLogRepository
-from src.config import AppConfig
-
-def create_repository(config: AppConfig, encryption_key: bytes) -> EventLogAdapter:
-    """
-    Create repository instance with encryption key
-    
-    Args:
-        config: Application configuration
-        encryption_key: 32-byte encryption key from key derivation
-    
-    Returns:
-        Repository instance ready to use
-    """
-    db_type = config.get('db_type', 'sqlite')
-    
-    if db_type == 'sqlite':
-        db_path = config.get('db_file_path', 'eventlog.db')
-        return SQLiteEventLogRepository(db_path, encryption_key)
-    elif db_type == 'sqlite_memory':
-        return SQLiteEventLogRepository(':memory:', encryption_key)
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
-```
+**Implementation Contract**:
+- Input:
+  - user-confirmed/resolved startup target
+  - backend-ready encryption key material
+- Behavior:
+  - inspect the resolved database technology/dialect
+  - dispatch to the matching backend-owned repository constructor
+  - reject unsupported dialects explicitly
+- Design rule:
+  - backend selection belongs here, but backend-specific credential derivation logic does not
 
 **Startup Integration**:
-```python
-# In main.py startup
-from src.security.key_derivation import derive_encryption_key
-from src.db.repositories.repository_factory import create_repository
-
-# After user enters credentials in key dialog
-key = derive_encryption_key(
-    password=user_password,
-    key_file_path=user_key_file,  # or None
-    iterations=kdf_iterations  # from config
-)
-
-# Create repository with key
-repository = create_repository(config, key)
-
-# Repository is now ready - database is decrypted
-```
+- validate password against the administrator-controlled minimum length
+- if a key file is provided, validate/load it through the shared helper boundary
+- let the selected backend resolve its own salt/output/iteration rules as needed
+- call the shared KDF primitive with those backend-selected inputs
+- pass the backend-ready key into repository creation
 
 ---
 

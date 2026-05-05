@@ -1,7 +1,7 @@
 # Database Architecture (AI)
 
 **Layer**: Data Access  
-**Last Updated**: 2026-04-28 (Session 036 - Retired legacy SQLite repository compatibility shell)
+**Last Updated**: 2026-05-04 (Session 064 - Documented technical-only startup requirement seam)
 
 ## Overview
 Database layer provides data persistence through a clear split between low-level database adapters and higher-level repositories. SQLite is the current concrete dialect, but the architecture is still shaped so additional backends can be introduced later without rewriting higher layers.
@@ -51,6 +51,7 @@ The generic bootstrap phases are:
 #### Bootstrap / Factory Owns
 - target/profile resolution
 - support validation
+- centralized backend-policy ownership for startup field requirements, remembered-target persistence/normalization, and coarse startup capabilities
 - adapter selection/creation
 - high-level orchestration
 - returning only ready-to-use repositories
@@ -68,6 +69,13 @@ The generic bootstrap phases are:
 - query construction
 - row/entity mapping
 - repository-level business rules
+
+### Startup Field Requirement Seam
+
+- When persistence/startup code needs to tell higher layers which startup inputs are required for a backend, it should expose only a stable technical contract: field identity, input kind, and required/editable flags.
+- Persistence/startup seams must not carry presenter-flavored labels, browse-button actions, or other GUI presentation metadata.
+- GUI code may derive labels, browse-button wiring, and other display behavior from the stable field identities without reintroducing backend-specific branching.
+- The current ownership seam for those backend startup facts is `src/db/repositories/bootstrap_backend_policy.py`; shared startup field/profile types may still live separately, but the policy decisions themselves should not be split back across app wiring, factory helpers, and ad-hoc wrapper modules.
 
 ### Do Not Hardcode SQLite Assumptions into Bootstrap
 
@@ -146,11 +154,13 @@ Repositories provide the application-facing persistence API.
 
 **Key Modules**:
 - `base_repository.py` - Generic repository base class; dialect-agnostic
+- `bootstrap_backend_policy.py` - Centralized backend-policy registry for startup/bootstrap support facts, remembered-target behavior, and repository creation dispatch
 - `repository_factory.py` - Constructs repositories from adapter + dialect context
 - `sqlite/event_log_repository.py` - Main concrete SQLite repository for the application
 
 **Current Runtime Shape**:
-- `RepositoryFactory` creates `SQLiteAdapter` and returns `EventLogRepository`
+- `bootstrap_backend_policy.py` owns startup/bootstrap backend policy facts and the per-dialect repository-construction dispatch
+- `RepositoryFactory` delegates to that centralized backend-policy seam and returns a ready repository
 - `EventLogRepository` owns CRUD/query behavior, repository-level business rules, and row mapping
 - `SQLiteAdapter` owns SQLite connection lifecycle, schema initialization, execution primitives, and transaction primitives
 
@@ -184,6 +194,7 @@ src/db/
 ├── sqlite_adapter.py
 ├── repositories/
 │   ├── base_repository.py
+│   ├── bootstrap_backend_policy.py
 │   ├── repository_factory.py
 │   └── sqlite/
 │       ├── event_log_repository.py
@@ -366,7 +377,7 @@ repository = EventLogRepository(adapter)
 - `user_preferences` - Last operator, column configs, etc.
 
 ### Attachment Table
-- `file_attachments` - Generic attachments for any entry type
+- `file_attachments` - Generic attachments for any entry type, with Phase 1 attachment content stored inside the encrypted database boundary rather than as plaintext filesystem files
 
 ### Indexes
 - Chronological queries: `event_time`, `logged_time`

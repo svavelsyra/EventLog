@@ -209,12 +209,12 @@ Domain entity representing radio/phone/in-person communications and written orde
 
 #### Optional Fields
 
-**attachments** (list of file references, nullable)
+**attachments** (list of attachment references, nullable)
 - Supporting documents (scanned orders, photos, etc.)
 - Optional
 - Multiple files allowed
 - Common use: email attachments, scanned written orders
-- File storage TBD (alongside DB or separate folder)
+- Phase 1 attachment content is stored inside the encrypted database boundary
 
 ### Business Rules
 
@@ -386,12 +386,12 @@ Domain entity representing operational events, incidents, and status changes.
 
 #### Optional Fields
 
-**attachments** (list of file references, nullable)
+**attachments** (list of attachment references, nullable)
 - Supporting documents (photos, reports, etc.)
 - Optional
 - Multiple files allowed
 - Common use: incident photos, status reports
-- File storage TBD (alongside DB or separate folder)
+- Phase 1 attachment content is stored inside the encrypted database boundary
 
 ### Business Rules
 

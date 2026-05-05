@@ -1,7 +1,7 @@
 # Security Architecture (AI)
 
 **Layer**: Infrastructure (Cross-Cutting Concern)  
-**Last Updated**: 2026-04-22
+**Last Updated**: 2026-04-30
 
 ## Overview
 
@@ -33,10 +33,10 @@ Security architecture for EventLog application focusing on data-at-rest protecti
 **Alternative Considered**: Python-layer encryption (encrypt fields before INSERT)
 - **Rejected**: Breaks SQL search capability, complex code, slower performance
 
-**Dependency Exception**: SQLCipher (`pysqlcipher3`) added to requirements.txt
+**Dependency Exception**: SQLCipher (`sqlcipher3`) added to requirements.txt
 - Justification: Security-critical code - don't roll your own crypto
 - Aligns with dependency philosophy exception policy
-- Well-established, widely-used library
+- Well-established SQLCipher binding with a working Windows CPython 3.14 wheel in the current EventLog environment
 
 **See**: `docs/DEPENDENCY_PHILOSOPHY.md` for updated dependency policy
 
@@ -69,55 +69,93 @@ Security architecture for EventLog application focusing on data-at-rest protecti
    
 2. **Password** (something you know):
    - User-entered at startup
-   - Minimum 8 characters (enforced)
+   - Minimum length comes from administrator-controlled policy/defaults rather than a universal hard-coded rule in the low-level primitive
    - Combined with key file (or used alone if file disabled)
 
-**Modes**:
-- **Operational Mode** (maximum security): Key file + password required
-- **Training Mode** (simplified): Password only
+**Allowed Credential Combinations**:
+- no password, no key file
+- password only
+- key file only
+- password + key file
 
-**Configuration**: Database flag `security_config.require_key_file` controls mode
+Which combinations are allowed is an administrator-defined creation-time policy decision, constrained by backend support for the selected technology.
+A specific technology may require completely different credential types or combinations, and the architecture must allow that flexibility without hard-coding one universal workflow.
+
+### Policy Ownership and Authority
+
+- The application should guide users toward stronger choices, but it should not hard-code one universal credential workflow for every operational context.
+- Administrators define the creation-time policy envelope, such as allowed database technologies, minimum password length, and allowed credential combinations.
+- Operators then choose a concrete setup within that envelope during database creation.
+- Once a database exists, that database's own protected state becomes the authoritative source for its effective rules.
+- Later changes to `config.ini` may affect future database creation on the local machine, but they are not retroactive authority over already-created databases.
+- This follows the realistic threat model: local config and Python source can be modified by anyone with machine access, while only protected database state can meaningfully hold authoritative rules after creation and unlock.
+
+### Security Boundary and Audit Scope
+
+The security architecture should remain reviewable as a deliberate boundary.
+
+**Shared security boundary**:
+- cross-technology key-derivation primitives
+- secret-material handling helpers
+- generic credential/file validation helpers
+- shared security exceptions and generic failure contracts
+- secure-deletion behavior
+
+**Backend-owned security behavior**:
+- backend-specific salt contracts
+- backend-specific key formatting or encoding rules
+- backend-specific metadata/header rules
+- backend-specific unlock/readiness verification
+
+Architecture rule:
+- if a security behavior exists only because SQLite/SQLCipher needs it, that behavior belongs with the SQLite implementation rather than in the shared security boundary
+- startup/UI/factory code may orchestrate the flow, but should not become the home of backend-specific cryptographic behavior
 
 ### Key Derivation Function (KDF)
 
 **Algorithm**: PBKDF2-HMAC-SHA256
 
-**Parameters**:
-- Salt: SHA-256 hash of key file (or hardcoded salt if password-only)
-- Iterations: 100,000 (computational cost to resist brute-force)
-- Output: 32 bytes (256 bits for AES-256)
+**Shared Primitive Contract**:
+- password bytes are derived from UTF-8 encoded user input
+- salt is a caller-supplied input
+- iteration count is a caller-supplied input
+- output length is a caller-supplied input
+
+This keeps the shared primitive portable across future backends. The shared primitive should validate structural correctness and clearly abusive bounds, but it should not silently hard-code backend-specific salt policy or narrow recommended ranges as if they were universal protocol rules.
+
+The shared primitive also should not assume that password material is always present. Credential presence requirements are policy-driven and backend-dependent, not universal architectural truth.
+
+**Backend-Owned Responsibilities**:
+- decide how salt is obtained for that backend
+- decide whether key-file bytes are hashed first or used in another backend-approved way
+- decide the output length expected by that backend
+- decide where authoritative iteration values come from for existing databases
 
 **Pattern**:
 ```python
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
 import hashlib
 
-def derive_encryption_key(file_path: str | None, password: str) -> bytes:
-    """Derive SQLCipher key from file + password"""
-    
-    if file_path:
-        # Operational mode: file + password
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-        salt = hashlib.sha256(file_data).digest()
-    else:
-        # Training mode: password only with hardcoded salt
-        salt = b'EventLog-Default-Salt-v1'  # Version for key rotation
-    
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100000,
+def derive_key(password: str, *, salt: bytes, iterations: int, length: int) -> bytes:
+    """Portable PBKDF2 primitive used by backend-owned wrappers."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        iterations,
+        dklen=length,
     )
-    return kdf.derive(password.encode('utf-8'))
 ```
+
+**Current SQLite/SQLCipher Example**:
+- key-file mode may hash the selected key-file bytes with SHA-256 and use that digest as the salt
+- password-only mode may use a SQLite-owned default salt contract
+- SQLite/SQLCipher currently expects a 32-byte output suitable for AES-256-backed database encryption
+- those rules are current backend-owned behavior, not the permanent generic KDF contract
 
 **Why PBKDF2**:
 - Standard KDF algorithm (NIST approved)
 - Computationally expensive (configurable iterations, default 100k = ~100ms)
-- Available in `cryptography` library (Python + Rust, portable)
+- Available through Python stdlib `hashlib.pbkdf2_hmac`, keeping the shared primitive dependency-light and portable
 - Brute-force resistant
 - Configurable iteration count allows future-proofing as hardware improves
 
@@ -126,61 +164,114 @@ def derive_encryption_key(file_path: str | None, password: str) -> bytes:
 - Scrypt: Memory-hard, but PBKDF2 sufficient with configurable iterations
 
 **Future-Proofing Note**: 
-- OWASP recommends 100,000 iterations as minimum (2023)
-- As computers get faster, this minimum will increase
-- Configurable iterations allow users on faster hardware to increase security
-- Example: Fast server (2030): 500,000+ iterations still acceptable startup delay
+- Recommended iteration defaults can rise over time as hardware changes
+- As computers get faster, recommended defaults should be revisited
+- Configurable iterations allow administrators and future backends to increase cost where appropriate
+- The architectural rule is that recommendation/policy and backend authority should stay explicit rather than being hidden inside a supposedly generic primitive
 
 ---
 
 ## Application Startup Flow
 
-### Key Loading Sequence
+### Generic Startup Sequence
 
 ```
 App Startup
     ↓
-Load security_config from database
+Load config.ini convenience state + bootstrap memory (if present)
     ↓
-Check: require_key_file flag?
-    ↓                    ↓
-  YES                   NO
-    ↓                    ↓
-Show Key Dialog:      Show Password Dialog:
- - File picker         - Password entry
- - Password entry      
-    ↓                    ↓
-Derive encryption key from:
- file + password        password only
+Resolve startup UI state:
+ - no remembered DB => show empty create/select flow
+ - remembered DB valid => prefill create/select flow
+ - remembered DB malformed => drop bad values, keep startup UI usable
     ↓
-Attempt database connection
+User confirms or edits selected database technology
     ↓
-conn.execute("PRAGMA key=?", (key.hex(),))
+Startup UI becomes technology-specific
+ - visible fields depend on chosen technology
+ - file pickers may exist or not
+ - auth inputs may differ by technology
+ - target/connection entries may differ by technology
     ↓
-Try simple query to verify key
+Create flow validates chosen setup against:
+ - allowed technologies
+ - admin-defined credential policy envelope
+ - selected backend support
     ↓
-Success?              Failure?
-    ↓                    ↓
-Continue loading     Show error:
-application          "Ogiltigt lösenord eller nyckelfil"
-                     Clear password, allow retry (unlimited)
+If allowed but weak => UI may warn/guidance without blocking
+    ↓
+User confirms target + required readiness inputs for selected technology
+    ↓
+Selected backend readiness/open flow runs
+    ↓
+Success?                         Failure?
+    ↓                               ↓
+Create repositories            Return to recovery-capable
+and continue loading           startup UI with useful feedback
+application
 ```
 
-**Key Dialog Location**: `src/gui/dialogs/key_dialog.py`
+### Current SQLite/SQLCipher Example
+
+The following is a **current-phase example**, not the universal startup contract for all future backends.
+
+For the current SQLite/SQLCipher path:
+- remembered `[DEFAULT].db_type=sqlite` and `[sqlite].database_path` may prefill the startup UI
+- remembered `[sqlite].require_key_file` may affect which unlock controls are shown
+- the UI may allow no credentials, password only, key file only, or password + key file, depending on current admin policy and SQLite support
+- for SQLite, create versus unlock is inferred from whether the selected target already exists, rather than chosen through a separate global mode selector
+- after the user confirms the target and credentials, SQLCipher-specific readiness happens via `PRAGMA key` and a simple verification query
+
+**Current SQLite unlock UI location**: `src/gui/dialogs/key_dialog.py`
 - Modal dialog, blocks application startup
 - Cannot be closed without providing credentials or exiting
 - Shows password strength indicator (Phase 2)
 - File picker DOES NOT remembers last directory (security)
 
-**Error Handling**:
+**Current SQLite error handling**:
 - Wrong password/file: Clear error message, allow unlimited retries
 - File not found: Specific error, allow file selection again
 - File unreadable: Permission error shown
 - **NO attempt limiting** - Provides no real security (attacker can modify code/config)
 
+### Bootstrap Memory Contract
+
+`config.ini` is a **convenience layer**, not an authority layer.
+
+It exists for three reasons only:
+1. **UI/app convenience state** - window position, size, and similar non-critical UX memory
+2. **Security creation defaults / policy inputs** - admin-overridden defaults and allowed-policy inputs for creating NEW encrypted databases
+3. **Bootstrap memory** - remembered last-used database technology/target and related startup hints used to prefill the startup UI
+
+This means:
+- the application must still be able to start when bootstrap memory is missing
+- the application must still be able to start when bootstrap memory is malformed
+- remembered bootstrap values are **prefill hints for the startup UX**, not mandatory truth
+- the startup UI must always provide a recovery path where the user can create a new database or manually select an existing one
+- remembered bootstrap values must not hardcode one backend's field set into the generic startup contract
+- creation-time policy inputs in config may shape what can be created next on this machine, but they are not the authoritative rules for an already-created database
+
+### Startup Recovery States
+
+The approved recovery model is:
+
+1. **No remembered database**
+   - Show startup/bootstrap UI with empty or safe default selections
+2. **Remembered database values are valid**
+   - Prefill the startup/bootstrap UI from config
+3. **Remembered database values are partially malformed**
+   - Keep usable remembered values, discard malformed ones, still show the startup/bootstrap UI
+4. **Remembered database values are unusable**
+   - Fall back to manual create/select flow without preventing application startup
+
+Architecture consequence:
+- malformed bootstrap memory may block automatic repository creation
+- malformed bootstrap memory must **not** block the application from reaching a usable recovery/startup UI
+- the generic startup contract chooses technology first, then allows that technology to define the relevant UI inputs and readiness flow
+
 **Security Note**: Database must be opened to read unencrypted schema metadata (like table names)
-- Bootstrap problem: Need to know if key file required BEFORE opening database
-- **Solution**: Store `require_key_file` flag in config.ini (trusted local file, same security as database file)
+- Bootstrap problem: The startup shell needs remembered hints before backend-specific readiness can begin
+- **Solution**: Store bootstrap memory in `config.ini` as convenience-only startup hints, select the technology first, then let the chosen backend/UI flow determine which target details and credential inputs are relevant
 
 **See**: `security_design.md` for security_config schema details
 
@@ -193,29 +284,10 @@ application          "Ogiltigt lösenord eller nyckelfil"
 **Location**: `src/db/repositories/sqlite_eventlog_repository.py`
 
 **Pattern**:
-```python
-from pysqlcipher3 import dbapi2 as sqlite
-
-class SQLiteEventLogRepository(EventLogAdapter):
-    def __init__(self, db_path: str, encryption_key: bytes):
-        self.db_path = db_path
-        self.encryption_key = encryption_key
-        self._connect()
-    
-    def _connect(self):
-        self.connection = sqlite.connect(self.db_path)
-        
-        # Set encryption key
-        self.connection.execute(f"PRAGMA key='{self.encryption_key.hex()}'")
-        
-        # Verify key is correct (will fail if wrong key)
-        try:
-            self.connection.execute("SELECT count(*) FROM sqlite_master")
-        except sqlite.DatabaseError:
-            raise ValueError("Invalid encryption key")
-        
-        self.cursor = self.connection.cursor()
-```
+- Open a SQLCipher-backed connection for the selected SQLite target.
+- Apply the backend-owned key/open command immediately after connecting.
+- Run a lightweight verification query so wrong key material fails before normal repository work begins.
+- Only after successful verification should the repository expose normal CRUD/query behavior.
 
 **All Queries Work Normally**:
 - No changes to SELECT, INSERT, UPDATE, DELETE
@@ -257,11 +329,9 @@ User clicks [Nollställ] button
    - logs/*.log*
    - Overwrite before delete (best effort)
    ↓
-5. Clear encryption key file (if accessible)
-   - If key file path known and writable
-   - Overwrite with random data (3 passes)
-   - Delete key file
-   - If on USB: Try to safely eject (best effort)
+5. Preserve external key files
+   - Key files are user-owned external inputs, not reset-managed app artifacts
+   - `Nollställ` must not delete an arbitrary file just because it was selected during bootstrap
    ↓
 6. Clear key from memory
    - Overwrite key variable with zeros
@@ -417,16 +487,17 @@ Finally: Delete file
 **Changes Required**:
 - Repository constructor accepts `encryption_key` parameter
 - Connection setup includes `PRAGMA key` statement
-- Factory pattern updated to handle key derivation
+- Factory pattern updated to consume shared security helpers and backend-owned security wrappers
 
 **Pattern**:
 ```
 Startup Flow:
   1. User enters password (+ optional key file)
-  2. Derive encryption key from inputs
-  3. Factory creates repository with key
-  4. Repository sets PRAGMA key on connection
-  5. Normal operation begins
+  2. Shared helpers validate generic credential/file inputs
+  3. Selected backend resolves its own salt/metadata rules and calls the shared KDF primitive
+  4. Factory creates repository with the backend-ready key
+  5. Repository applies backend-specific open/readiness steps (for SQLite/SQLCipher: `PRAGMA key` + verification query)
+  6. Normal operation begins
 ```
 
 **See**: `db_architecture.md` for repository factory pattern details.
@@ -442,7 +513,7 @@ Startup Flow:
 - Settings: Allow changing password (Phase 2)
 - Nollställ: Enhanced clearing (database layer calls secure_delete)
 
-**Minimal GUI Impact**: One dialog at startup, rest handled in database layer.
+**Minimal GUI Impact**: One dialog at startup, with GUI limited to collecting inputs and showing generic feedback while shared security and backend-owned layers perform the actual security work.
 
 **See**: GUI architecture not updated - security architecture documents GUI needs.
 
@@ -450,24 +521,28 @@ Startup Flow:
 
 ## Dependencies
 
-### New Dependencies (When Implemented)
+### New Dependencies
 
-**Application** (add to requirements.txt during implementation):
-- `pysqlcipher3>=1.0.0` - SQLCipher bindings for Python
-- `cryptography>=41.0.0` - PBKDF2 key derivation
+**Application**:
+- `sqlcipher3>=0.6.2` - SQLCipher bindings for Python
+
+**Shared Primitive Note**:
+- The shared PBKDF2 primitive can be implemented with Python stdlib `hashlib.pbkdf2_hmac`, so a separate application dependency is not required just for generic key derivation.
+- Additional crypto dependencies should only be added later if a backend-specific integration need cannot be satisfied safely with stdlib.
 
 **Justification**: Security-critical functionality per dependency philosophy.
 
-**Status**: NOT YET ADDED - Designed in Session 006, will be added when implementing encryption.
+**Status**: Added during Epic `002` dependency bring-up after installability verification on Windows/Python 3.14.
 
 **See**: `docs/DEPENDENCY_PHILOSOPHY.md` for updated policy
 
 ### Dependency Security
 
 **Supply Chain Risk Mitigation**:
-- Both libraries well-established, widely used
-- `cryptography`: 10,000+ GitHub stars, used by major projects
-- `pysqlcipher3`: Battle-tested, used in production applications
+- Keep the dependency set minimal and justify each non-stdlib package explicitly.
+- `sqlcipher3`: selected because it provides a working SQLCipher wheel for the current Windows/Python 3.14 environment.
+- `cryptography`: still a strong future candidate if a backend-specific crypto need appears that stdlib cannot satisfy safely.
+- Keep the shared KDF primitive stdlib-based unless a future backend-specific requirement proves that an additional dependency is necessary
 - Pin versions in requirements.txt (avoid auto-updates)
 
 ---
@@ -507,13 +582,17 @@ Startup Flow:
 **CRITICAL**: Config.ini and Python source code are **completely unprotected**. Any attacker with physical access can read/modify them. Therefore:
 
 **Settings in config.ini**:
-1. **Bootstrapping info** - Needed to open database (db_file_path, require_key_file)
-2. **Defaults for NEW databases** - Used when creating database (kdf_iterations written to DB header)
-3. **Operational conveniences** - NOT security enforcement (secure_delete_passes)
+1. **Bootstrap memory** - Remembered last-used database technology/target and related startup hints for prefilled recovery UX
+2. **Defaults for NEW databases** - Used when creating databases (for example `kdf_iterations` written during creation)
+3. **Administrative policy/default inputs** - Such as minimum password length, allowed credential combinations, and allowed database technologies for creation-time validation
+4. **Operational conveniences** - NOT security enforcement (for example `secure_delete_passes`)
+
+For bootstrap/security-related values, `[DEFAULT]` acts as the shared inherited fallback layer. Ordinary sections such as `[sqlite]`, `[Logging]`, and `[Application]` remain normal sections; technology sections may override shared bootstrap/security values when needed.
 
 **Settings in database**:
 - Values that actually matter (read from encrypted database)
 - Cannot be tampered with without knowing encryption key
+- Effective rules for an already-created database belong here rather than in later local config changes
 
 **Settings NEVER stored**:
 - Anything that would leak security info (last_key_file_path)
@@ -524,25 +603,36 @@ Startup Flow:
 
 **Highlights**:
 ```ini
-[DB]
-# Path to THIS database instance
-db_file_path = eventlog.db
+[DEFAULT]
+# Remembered/selected database technology for startup convenience
+db_type = sqlite
 
-# Whether THIS database requires key file (bootstrap info)
-require_key_file = false
+# Whether NEW databases must use a key file when created on this machine
+require_key_file_for_creation = false
 
-[Security]
 # Defaults for creating NEW databases
 kdf_iterations = 100000  # Written to DB header when creating DB
 
 # Operational settings
 secure_delete_passes = 3  # Convenience, not security enforcement
+
+[sqlite]
+# Remembered last-used SQLite target for startup convenience
+database_path = eventlog.db
+
+# Whether the remembered last-used SQLite target used key file mode
+require_key_file = false
 ```
 
 **REMOVED SETTINGS** (Provide no real security):
 - ~~`max_login_attempts`~~: REMOVED - Attacker can bypass by modifying code. No value against competent attacker.
 
-**Important**: `kdf_iterations` in config.ini is **default for NEW databases only**. Actual iterations stored in SQLCipher database header (cannot be read or modified without decryption key).
+**Important**:
+- `kdf_iterations` in config.ini is a **default for NEW databases only**. Actual iterations are stored in SQLCipher metadata/header state.
+- `min_password_length` in config.ini is an administrator-controlled policy input used by higher layers and shared validation helpers; it is not a cryptographic protocol rule.
+- the selected technology section's `require_key_file` is remembered startup memory for existing-database unlock UX, while `[DEFAULT].require_key_file_for_creation` is the create-time policy input for new databases.
+- The current shared `[DEFAULT]` create-time inputs are not a guarantee that every future backend will use the same policy names or one universal global schema.
+- Bootstrap memory in config.ini is a **startup convenience**. If it is missing or malformed, startup must recover through the create/select database UI rather than treating config as authoritative.
 
 ---
 

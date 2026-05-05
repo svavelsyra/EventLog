@@ -60,7 +60,7 @@ Application uses ConfigParser with `config.ini` for global settings.
 
 ### Database Settings
 - `db_type` - Database technology / dialect selector (e.g., "sqlite", future encrypted or other backend variants)
-- `db_file_path` - Path to database file (for file-based databases)
+- technology-specific target field such as `[sqlite].database_path` - Path/target for the selected backend
 - `db_in_memory` - Use in-memory database (for SQLite, testing)
 - Future: `db_url`, `db_username`, etc. for remote databases
 
@@ -356,7 +356,7 @@ File attachments for any entry type (communication, event, or personnel).
 - `parent_table` TEXT NOT NULL - Which table this is attached to ("communication_entries", "event_entries", "personnel_entries")
 - `parent_id` INTEGER NOT NULL - ID in parent table
 - `file_name` TEXT NOT NULL - Original file name
-- `file_path` TEXT NOT NULL - Path to stored file (relative to attachments directory)
+- `file_content` BLOB NOT NULL - Encrypted attachment content stored inside the encrypted database boundary for Phase 1
 - `file_size` INTEGER - Size in bytes
 - `file_type` TEXT - File extension or MIME type
 - `uploaded_time` TEXT NOT NULL - When attached (ISO 8601 format)
@@ -367,7 +367,7 @@ File attachments for any entry type (communication, event, or personnel).
 **Indexes**:
 - `idx_attachment_parent` ON (parent_table, parent_id) - Find attachments for an entry
 
-**Reasoning**: Generic attachment table that can serve all three entry types.
+**Reasoning**: Generic attachment table that can serve all three entry types while keeping attachment content inside the same encrypted-at-rest boundary as the rest of the operational data.
 
 ### categories
 User-configurable category/tag list for events.
@@ -454,10 +454,10 @@ Store as TEXT (e.g., "123,124,125")
 - Parse in Python: `ids.split(',')`
 
 ### File Storage
-Files stored in filesystem, references in database
-- Directory structure: `attachments/{year}/{month}/{filename}`
-- Database stores relative path
-- Allows easy backup of both DB and files
+Phase 1 attachment content is stored inside the encrypted database
+- Attachment metadata and binary content share the same encrypted-at-rest boundary
+- Plaintext filesystem attachment directories are not acceptable for security-sensitive attachment content
+- Future large-attachment support, if ever approved, would require separately encrypted external storage rather than a fallback to normal readable files
 
 ## Required Operations
 
@@ -509,7 +509,7 @@ Files stored in filesystem, references in database
 - Add file attachment (any entry type)
 - List attachments for entry
 - Remove attachment
-- Retrieve attachment file path
+- Retrieve attachment content for controlled open/export handling
 
 ### General Operations
 - Export to CSV, PDF (per entry type)

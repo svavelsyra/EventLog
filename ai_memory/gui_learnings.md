@@ -2,7 +2,7 @@
 
 **Purpose**: Tkinter-specific lessons, common pitfalls, and implementation patterns learned during GUI development.
 
-**Last Updated**: 2026-04-22 (Session 008)
+**Last Updated**: 2026-05-04 (Session 068 - Added startup architecture completion guardrail)
 
 ## Tkinter Grid Layout
 
@@ -79,5 +79,42 @@ self.root.geometry(f"{width}x{height}+{x}+{y}")
 
 ## Future Learnings
 
-*Add implementation lessons here as GUI development progresses*
+## Session 062 - GUI/App Protocol Boundaries
+
+- When the GUI layer consumes a minimal protocol from app-owned result objects, define protocol members as read-only `@property` accessors instead of writable data attributes. Static type checkers may reject frozen dataclasses or named tuples as satisfying writable protocol attributes even when the runtime behavior is effectively immutable.
+- Prefer structural conformance across the GUI/app boundary over nominal inheritance from GUI protocols in app-layer value objects. The app should return a normal result object with read-only properties, and the GUI protocol should describe only the read operations it needs.
+- When a caller result needs to warn about a manual operator action that is not itself a reset failure (for example possible external key files), keep that signal in a separate advisory field rather than smuggling it into the same follow-up issue list that drives `MISSLYCKADES` messaging. GUI copy can then decide when to show the advisory without corrupting the success/failure contract.
+
+## Session 064 - Startup Dialog State Should Not Duplicate Field Contract Facts
+
+- When startup state already carries a shared field contract like `backend_fields`, do not add extra booleans for field presence, requiredness, or editability. Let the view derive those facts from the field contract so presenter state has one source of truth.
+- For startup dialogs, label text and hint visibility may still be GUI-owned, but they should be derived from stable field identities plus presenter-provided copy rather than mirrored through extra state flags.
+
+## Session 065 - Startup Policy Flags Should Not Round-Trip Through the View
+
+- If a startup requirement like key-file mandatory/optional status is already expressed by the shared `backend_fields` contract, do not add a hidden presenter/view submission boolean such as `require_key_file` just to carry policy through re-renders.
+- Treat administrator-configured policy as presenter/config input and operator-entered values as submission input. The view should submit the chosen `key_file_path`, not a second hidden policy toggle.
+
+## Session 065 - Startup Mode Inference and Review-Churn Guardrail
+
+- For current SQLite startup flows, do not add an explicit create/open selector in the UI. Create vs unlock should continue to be inferred from the selected target path (`database_path` exists => unlock, otherwise create).
+- Treat `show_mode_selector` as a future backend-capability escape hatch for technologies whose selected target cannot imply create vs unlock. It is not a dormant SQLite control that should be revived by default.
+- When the startup area already has a known larger structural destination, avoid intermediate GUI cleanups that are likely to be replaced in the next session and therefore create extra review churn. Prefer the real structural slice instead.
+
+## Session 066 - Startup Refactor Steps Should Land in the Final Structure
+
+- The startup refactor has an explicit user-approved exception to the default small-step preference: do not manufacture temporary presenter/view/controller shapes purely to make the current patch smaller if those shapes are expected to be removed immediately by the next approved startup step.
+- For this refactor, step size should be judged by lasting architectural value and review efficiency, not only by line-count minimization. Prefer a larger coherent slice when it lands directly in the intended field-driven structure.
+
+## Session 067 - Startup Flow Ownership Belongs in the Presenter
+
+- When startup mode or visible startup-state changes depend on current operator input (`dialect`, `database_path`, remembered/manual target choice), treat that as presenter-owned flow logic, not controller policy.
+- The startup controller should remain a thin Tk adapter: read current view submission, call the presenter for recomputed state, render it, and manage browse/reset/close wiring.
+- Avoid splitting initial startup-state resolution and later interactive recomputation across different layers. If the presenter owns ongoing startup state decisions, it should also own initial remembered-target resolution so there is one authoritative startup flow path.
+
+## Session 068 - Do Not Leave Known Startup Architecture Mismatches To Grow
+
+- When a remaining startup-area architectural mismatch is already identified and new work would otherwise accumulate on top of it, do not accept “works for now” as sufficient justification to leave it in place.
+- For startup refactors, prefer the next durable ownership-alignment slice over a smaller tactical patch if the smaller patch would knowingly preserve a mismatch that future work will build on.
+- The user wants restart-ready session guidance that names the exact next architectural slice, so a future AI can continue with a simple “go on” prompt instead of rediscovering the intended direction.
 

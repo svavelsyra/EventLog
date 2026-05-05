@@ -2,7 +2,7 @@
 
 **Purpose**: SQLite-specific lessons, query patterns, and database implementation pitfalls learned during development.
 
-**Last Updated**: 2026-04-28 (Session 037 - Added personnel repository query/validation learning)
+**Last Updated**: 2026-05-04 (Session 069 - Added centralized startup backend-policy ownership lesson)
 
 ## Session 032 - Repository Settings Bootstrap
 
@@ -14,6 +14,27 @@
 
 - When a SQLite `CHECK` constraint maps directly to a repository-facing invalid state, validate it in the repository first so callers get a clear Python error instead of a lower-level SQLite failure.
 - For personnel data, treat `logged_time` as the authoritative recency field for general list/history views, while `last_contact_time` drives active operational-awareness ordering and `expected_checkin_time` drives overdue-alarm urgency ordering.
+
+## Session 053 - Reset Flow Must Stay Backend-Aware
+
+- Shared reset coordination should stay technology-neutral at the sequencing level only; actual lock/close/delete work must remain backend-owned because different technologies have different active handles, sidecar artifacts, bootstrap traces, and deletion requirements.
+- Do not let one backend's current artifact set become the implied generic reset contract in shared modules. Shared code may coordinate phases and neutral outcomes, but backend-specific reset/invalidation and artifact cleanup should plug in from backend-owned seams.
+
+## Session 064 - Startup Requirement Contracts Must Stay Technical
+
+- A persistence-owned startup capability seam should expose only stable technical startup requirements such as field identity, input kind, and required/editable flags.
+- Do not push presenter-flavored metadata like labels or browse-button actions down into `src/db/repositories/startup_selection.py`; that leaks GUI concerns into the persistence contract and creates duplicate mapping layers.
+
+## Session 069 - Startup Backend Policy Should Have One Authoritative Owner
+
+- When startup/bootstrap backend facts are split across factory helpers, remembered-target serializers/resolvers, app wiring, and startup-selection helpers, future work tends to grow around the split and creates immediate refactor pressure.
+- Prefer one centralized backend-policy seam that owns supported dialects, startup field requirements, remembered-target normalization/persistence behavior, cleanup metadata dispatch, coarse capability facts, and per-dialect repository construction dispatch.
+- Shared startup field/profile types may remain in a small separate module, but policy decisions themselves should not be duplicated across multiple startup modules.
+
+## Session 054 - Reset Integration Tests Need Real On-Disk SQLite Targets
+
+- For reset-flow integration coverage, prefer temporary on-disk SQLite databases over `:memory:` so the test can exercise the real close/invalidate/delete sequence and confirm file-backed cleanup behavior.
+- Cover credential-mode combinations explicitly in reset integration tests: no password/no key file, password only, password plus key file, and key-file only.
 
 ## Expected Content Areas
 

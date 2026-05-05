@@ -5,7 +5,6 @@ Fixtures defined here are only available to integration tests.
 Use for setting up real databases, complex test scenarios, etc.
 """
 
-import pytest
 
 
 # Example integration test specific fixtures:

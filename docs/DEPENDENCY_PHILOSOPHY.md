@@ -97,20 +97,18 @@ Dependencies: [list its dependencies]
 - **Database**: Using sqlite3 (stdlib) instead of ORMs
 - **Testing**: Minimal pytest (necessary for good tests)
 
-### ✅ Good: Designed for Security (Session 006, not yet implemented)
-- **Database encryption**: pysqlcipher3
-  - DESIGNED for database encryption at rest (see security_architecture.md)
+### ✅ Good: Implemented for Security
+- **Database encryption**: sqlcipher3
+  - Selected for SQLCipher-backed database encryption at rest (see `security_architecture.md`)
   - Security-critical: Don't roll your own encryption
-  - Battle-tested: Used by WhatsApp, Signal, enterprise apps
   - Transparent: Minimal code changes, full SQL functionality
-  - **Status**: Designed, will be added to requirements.txt during implementation
-  
-- **Cryptography**: cryptography library
-  - DESIGNED for PBKDF2 key derivation (see security_architecture.md)
-  - Security-critical: Cryptographic primitives
-  - Well-maintained: Industry standard for Python
-  - Portable: Pure Python + Rust, cross-platform
-  - **Status**: Designed, will be added to requirements.txt during implementation
+  - Practical fit: provides a Windows CPython 3.14 wheel in the current EventLog development environment, unlike `pysqlcipher3`
+  - **Status**: Added to `requirements.txt` during Epic `002` implementation
+
+### ✅ Good: Keep stdlib when it is sufficient
+- **PBKDF2 key derivation**: Python stdlib `hashlib.pbkdf2_hmac`
+  - Security-sensitive, but already provided by the standard library
+  - Avoids an unnecessary extra application dependency for the shared KDF helper layer
 
 ### ✅ Good: Would Add If Needed (Future)
 - **Cryptography**: cryptography library (also designed for database encryption above)

@@ -5,6 +5,7 @@ from src.config.app_config import (
     load_app_config,
     load_database_config,
     parse_database_config,
+    save_bootstrap_section_options,
 )
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     "load_app_config",
     "load_database_config",
     "parse_database_config",
+    "save_bootstrap_section_options",
 ]
 

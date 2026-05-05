@@ -1,12 +1,55 @@
 # EventLog Application Configuration Template
 # Copy this to config.ini and customize for your installation
 
-[Database]
-# Database file path (relative to application root)
-db_file_path = eventlog.db
+[DEFAULT]
+# Shared fallback values for bootstrap/security-related settings.
+# Regular sections such as [sqlite], [Logging], and [Application] remain valid;
+# values placed here are simply inherited unless a section overrides them.
+# These values are convenience state only; existing encrypted databases remain
+# authoritative for their own runtime security values.
 
-# Database type (sqlite only for now)
+# Selected database technology.
+# Startup resolves technology first, then uses that technology section for its
+# remembered target details and any technology-specific overrides.
+# sqlite is the only supported runtime today.
 db_type = sqlite
+
+# Whether NEW databases created on this machine must use a key file.
+# This is separate from the technology section's `require_key_file`, which only remembers whether
+# the last already-created database used key-file mode at unlock time.
+require_key_file_for_creation = false
+
+# Minimum password length used when creating a NEW database.
+min_password_length = 8
+
+# Best-effort overwrite passes for emergency Nollställ cleanup.
+secure_delete_passes = 3
+
+# PBKDF2 iteration default used when creating a NEW encrypted database.
+# Existing encrypted databases must not silently inherit later config changes here.
+kdf_iterations = 100000
+
+# NEVER store passwords, derived keys, raw key-file content, or remembered key-file paths
+# in config.ini, logs, or database tables.
+
+[sqlite]
+# Remembered startup hints for the selected SQLite target.
+# SQLite-specific overrides for shared [DEFAULT] values may also be added here if needed.
+# These values help prefill the startup UI, but they are not authoritative and
+# must never prevent recovery-capable startup if they are missing or malformed.
+
+# Remembered last-used SQLite database target/path.
+database_path = eventlog.db
+
+# Remembered last-used unlock mode hint for this SQLite target.
+# This is startup memory for opening an already-created database, not the admin
+# policy for whether NEW databases must use a key file.
+# Do NOT store any key-file path here.
+require_key_file = false
+
+# Optional SQLite-specific override examples:
+# min_password_length = 10
+# require_key_file_for_creation = true
 
 [Logging]
 # Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL

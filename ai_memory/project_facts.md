@@ -143,6 +143,10 @@ SQLite Dialect Implementation
 ### Config vs Database
 - **config.ini** - Bootstrapping and defaults only (NOT security enforcement)
 - **Database header** - Actual security parameters (self-describing, tamper-proof when encrypted)
+- `require_key_file` in config is an administrator-defined creation/startup policy input, not a free operator preference to toggle arbitrarily in the startup UI.
+
+### Reset Ownership Boundary
+- User-selected key files are treated as external/user-owned inputs, not app-owned reset artifacts. `Nollställ` may remove app-owned database/log/bootstrap data, but it must not automatically delete an arbitrary external file just because it was used as a key file.
 
 ---
 
@@ -232,5 +236,5 @@ SQLite Dialect Implementation
 
 ---
 
-**Last Updated**: 2026-04-28 (Session 033 - Updated DB architecture facts for adapter/repository pivot)
+**Last Updated**: 2026-05-04 (Session 064 - Clarified config-owned key-file policy)
 
