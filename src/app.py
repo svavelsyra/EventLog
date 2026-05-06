@@ -1,8 +1,8 @@
 """Current EventLog application entry point.
 
-The application currently consists of the real startup dialog flow. Later
-sessions can extend this entry point to continue from a successful startup into
-an operator main window once that shell exists.
+The application now consists of an app-owned Tk shell that hosts the startup
+dialog first and, after successful startup, hands off to a minimal visible main
+window scaffold on that same root.
 """
 
 from __future__ import annotations
@@ -31,10 +31,10 @@ from src.db.repositories.startup_bootstrap import (
     BackendCleanupOutcome,
     cleanup_remembered_bootstrap_target,
 )
+from src.gui.app_shell import AppShell
 from src.gui.startup_dialog_controller import (
     EmergencyResetCallback,
     EmergencyResetResult,
-    StartupDialogController,
 )
 from src.gui.presenters.startup_dialog_presenter import StartupDialogSuccess
 from src.security import ResetCoordinator, ResetOutcome
@@ -305,19 +305,24 @@ def run_active_context_reset(
 
 
 def run_app(config_path: str | PathLike[str] | None = None) -> StartupDialogSuccess | None:
-    """Run the current EventLog startup flow and return its startup result."""
+    """Run startup, show the minimal main window, and return the startup result."""
     resolved_config_path = _resolve_config_path(config_path)
     database_config = resolve_database_config(resolved_config_path)
-    controller = StartupDialogController(
+    shell = AppShell()
+    startup_result = shell.run_startup_dialog(
         database_config,
         emergency_reset_callback=_build_startup_emergency_reset_callback(
             database_config,
             config_path=resolved_config_path,
         ),
     )
-    startup_result = controller.run()
     if startup_result is not None:
-        save_bootstrap_target_config(resolved_config_path, startup_result.remembered_target)
+        try:
+            save_bootstrap_target_config(resolved_config_path, startup_result.remembered_target)
+        except Exception:
+            shell.close()
+            raise
+        shell.show_main_window(startup_result)
 
     return startup_result
 

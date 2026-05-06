@@ -110,6 +110,14 @@ not as forbidden scope creep.
 - Do **not** invent extra pytest flags, multi-file command combinations, reordered file lists, node selectors, or `-k` filters unless the user explicitly asks.
 - When running tests, reuse the exact approved command shapes and consult `ai_instructions/testing.md` for the detailed policy.
 
+### General terminal approval friction
+
+- Prefer a very small, stable family of terminal command shapes, not only for pytest.
+- Do **not** introduce extra terminal commands unless they are necessary to complete or verify the task.
+- Simple root-level Git commands like `Set-Location <project-root>; git --no-pager diff` or `Set-Location <project-root>; git --no-pager status` are acceptable when truly needed.
+- Avoid Git command churn such as extra flags, path-limited diffs, or per-file diff command variants unless the user explicitly asks for them.
+- Reason: approval friction comes from command-shape variation itself, not only from pytest flags.
+
 ---
 
 ## FILE MODIFICATION PROTOCOL
@@ -314,5 +322,5 @@ AI: [Starts file2.md without waiting] ← WRONG! Violated protocol
 
 ---
 
-**Last Updated**: 2026-05-06 (Session 089 - Removed stale no-Git assumption after user confirmed Git is available)
+**Last Updated**: 2026-05-06 (Session 091 - Added stable terminal-command preference to avoid approval churn from ad-hoc Git variants)
 

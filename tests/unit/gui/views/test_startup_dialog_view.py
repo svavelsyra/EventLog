@@ -211,6 +211,7 @@ def _scenario_render_state_for_manual_unlock(root: tk.Tk) -> dict[str, object]:
             "mode_value": view.mode_var.get(),
             "target_source_manager": view.target_source_row.winfo_manager(),
             "target_source_value": view.use_remembered_target_var.get(),
+            "manual_target_label": view.use_manual_target_button.cget("text"),
             "dialect_manager": view.dialect_row.winfo_manager(),
             "database_path_manager": _field_row(view, StartupFieldName.DATABASE_PATH).winfo_manager(),
             "database_path_state": _field_entry_state(view, StartupFieldName.DATABASE_PATH),
@@ -218,6 +219,45 @@ def _scenario_render_state_for_manual_unlock(root: tk.Tk) -> dict[str, object]:
             "password_policy_hint_text": view.password_policy_hint_label.cget("text"),
             "key_file_manager": _field_row(view, StartupFieldName.KEY_FILE_PATH).winfo_manager(),
             "key_file_label": _field_label(view, StartupFieldName.KEY_FILE_PATH),
+        }
+    finally:
+        view.destroy()
+
+
+def _scenario_render_state_for_neutral_sqlite_target_selection(root: tk.Tk) -> dict[str, object]:
+    view = StartupDialogView(root)
+    try:
+        view.render_state(
+            StartupDialogState(
+                mode=StartupDialogMode.CREATE,
+                title="EventLog - Välj eller skapa databas",
+                submit_label="Skapa",
+                dialect="sqlite",
+                database_path="",
+                min_password_length=8,
+                password_policy_hint="Minst 8 tecken för nytt lösenord.",
+                allow_emergency_reset=False,
+                backend_fields=(
+                    StartupFieldRequirement(
+                        field_name=StartupFieldName.DATABASE_PATH,
+                        kind=StartupFieldKind.FILE_PATH,
+                        required=True,
+                        editable=True,
+                    ),
+                ),
+            )
+        )
+        view.window.update_idletasks()
+        return {
+            "title": view.window.title(),
+            "summary_text": view.summary_label.cget("text"),
+            "database_path_manager": _field_row(view, StartupFieldName.DATABASE_PATH).winfo_manager(),
+            "password_manager": _field_row(view, StartupFieldName.PASSWORD).winfo_manager(),
+            "password_confirmation_manager": _field_row(
+                view,
+                StartupFieldName.PASSWORD_CONFIRMATION,
+            ).winfo_manager(),
+            "key_file_manager": _field_row(view, StartupFieldName.KEY_FILE_PATH).winfo_manager(),
         }
     finally:
         view.destroy()
@@ -249,17 +289,39 @@ def _scenario_invoke_callbacks(root: tk.Tk) -> list[str]:
     view = StartupDialogView(root)
     try:
         events: list[str] = []
+        view.render_state(
+            StartupDialogState(
+                mode=StartupDialogMode.CREATE,
+                title="EventLog - Välj eller skapa databas",
+                submit_label="Skapa",
+                dialect="sqlite",
+                database_path="",
+                min_password_length=8,
+                password_policy_hint="Minst 8 tecken för nytt lösenord.",
+                allow_emergency_reset=False,
+                backend_fields=(
+                    StartupFieldRequirement(
+                        field_name=StartupFieldName.DATABASE_PATH,
+                        kind=StartupFieldKind.FILE_PATH,
+                        required=True,
+                        editable=True,
+                    ),
+                ),
+            )
+        )
         view.set_submit_callback(lambda: events.append("submit"))
         view.set_cancel_callback(lambda: events.append("cancel"))
         view.set_emergency_reset_callback(lambda: events.append("reset"))
         view.set_browse_database_callback(lambda: events.append("browse-database"))
         view.set_browse_key_file_callback(lambda: events.append("browse"))
+        view.set_database_path_changed_callback(lambda: events.append("database-path-changed"))
 
         view.submit_button.invoke()
         view.cancel_button.invoke()
         view.emergency_reset_button.invoke()
         view._field_widgets[StartupFieldName.DATABASE_PATH].browse_button.invoke()
         view._field_widgets[StartupFieldName.KEY_FILE_PATH].browse_button.invoke()
+        view._handle_database_path_changed()
         view.handle_close_requested()
         return events
     finally:
@@ -299,7 +361,7 @@ def _scenario_render_state_without_selected_dialect(root: tk.Tk) -> dict[str, ob
     try:
         empty_state = StartupDialogState(
             mode=StartupDialogMode.CREATE,
-            title="EventLog - Skapa krypterad databas",
+            title="EventLog - Välj eller skapa databas",
             submit_label="Skapa",
             dialect="",
             database_path="",
@@ -320,6 +382,8 @@ def _scenario_render_state_without_selected_dialect(root: tk.Tk) -> dict[str, ob
 
         view.render_state(empty_state)
         view.window.update_idletasks()
+        title_without_dialect = view.window.title()
+        summary_without_dialect = view.summary_label.cget("text")
         size_without_dialect = (view.window.winfo_width(), view.window.winfo_height())
         view.focus_primary_input()
         focused_widget = view.window.focus_get()
@@ -338,6 +402,8 @@ def _scenario_render_state_without_selected_dialect(root: tk.Tk) -> dict[str, ob
         size_with_sqlite = (view.window.winfo_width(), view.window.winfo_height())
 
         return {
+            "title_without_dialect": title_without_dialect,
+            "summary_without_dialect": summary_without_dialect,
             "dialect_value": view.dialect_var.get(),
             "size_without_dialect": size_without_dialect,
             "size_with_sqlite": size_with_sqlite,
@@ -465,6 +531,7 @@ def test_render_state_for_manual_unlock_shows_database_target_fields(run_tk_scen
     assert result["mode_value"] == StartupDialogMode.UNLOCK.value
     assert result["target_source_manager"] == "grid"
     assert result["target_source_value"] is False
+    assert result["manual_target_label"] == "Välj eller ange databas manuellt"
     assert result["dialect_manager"] == "grid"
     assert result["database_path_manager"] == "grid"
     assert result["database_path_state"] == "normal"
@@ -472,6 +539,19 @@ def test_render_state_for_manual_unlock_shows_database_target_fields(run_tk_scen
     assert result["password_policy_hint_text"] == ""
     assert result["key_file_manager"] == "grid"
     assert result["key_file_label"] == "Nyckelfil (valfritt):"
+
+
+def test_render_state_for_neutral_sqlite_target_selection_uses_neutral_title_and_summary(
+    run_tk_scenario,
+) -> None:
+    result = run_tk_scenario(_scenario_render_state_for_neutral_sqlite_target_selection)
+
+    assert result["title"] == "EventLog - Välj eller skapa databas"
+    assert result["summary_text"] == "EventLog - Välj eller skapa databas"
+    assert result["database_path_manager"] == "grid"
+    assert result["password_manager"] == ""
+    assert result["password_confirmation_manager"] == ""
+    assert result["key_file_manager"] == ""
 
 
 def test_get_submission_returns_current_field_values_and_blank_key_file_as_none(
@@ -493,7 +573,15 @@ def test_get_submission_returns_current_field_values_and_blank_key_file_as_none(
 def test_callbacks_are_invoked_by_buttons_and_close_protocol(run_tk_scenario) -> None:
     events = run_tk_scenario(_scenario_invoke_callbacks)
 
-    assert events == ["submit", "cancel", "reset", "browse-database", "browse", "cancel"]
+    assert events == [
+        "submit",
+        "cancel",
+        "reset",
+        "browse-database",
+        "browse",
+        "database-path-changed",
+        "cancel",
+    ]
 
 
 def test_clear_sensitive_fields_only_clears_confirmation_when_requested(run_tk_scenario) -> None:
@@ -509,6 +597,8 @@ def test_render_state_without_selected_dialect_hides_backend_fields_and_keeps_fi
 ) -> None:
     result = run_tk_scenario(_scenario_render_state_without_selected_dialect)
 
+    assert result["title_without_dialect"] == "EventLog - Välj eller skapa databas"
+    assert result["summary_without_dialect"] == "EventLog - Välj eller skapa databas"
     assert result["dialect_value"] == "sqlite"
     assert result["managers_without_dialect"] == {
         "database_path": "",

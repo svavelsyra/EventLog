@@ -2,8 +2,8 @@
 
 This controller keeps the startup dialog runnable without moving validation or
 secure-bootstrap policy into widget code. It owns only GUI-layer orchestration:
-creating the hidden Tk root, wiring callbacks, invoking the presenter, and
-closing the dialog when the operator cancels or startup succeeds.
+wiring callbacks, invoking the presenter, and closing the dialog when the
+operator cancels or startup succeeds beneath a caller-owned app-shell root.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Callable, Protocol, cast
 
 from src.config import DatabaseConfig
 from src.core import ResetFollowUpIssue
-from src.db.repositories.startup_selection import StartupFieldName
+from src.db.repositories.startup_selection import PathExists, StartupFieldName
 from src.gui.presenters.startup_dialog_presenter import (
     StartupDialogFailureCode,
     StartupDialogMode,
@@ -86,6 +86,9 @@ class StartupDialogViewProtocol(Protocol):
     def set_browse_key_file_callback(self, callback: VoidCallback) -> None:
         """Register browse-key-file callback."""
 
+    def set_database_path_changed_callback(self, callback: VoidCallback) -> None:
+        """Register manual database-path edit callback."""
+
     def set_mode_changed_callback(self, callback: VoidCallback) -> None:
         """Register mode-selector callback."""
 
@@ -118,7 +121,7 @@ class StartupDialogViewProtocol(Protocol):
 
 
 class TkRootProtocol(Protocol):
-    """Minimal hidden-root contract used by the startup dialog controller."""
+    """Minimal caller-owned root contract used by the startup dialog controller."""
 
     def withdraw(self) -> None:
         """Hide the root window."""
@@ -134,7 +137,7 @@ ViewFactory = Callable[[tk.Misc], StartupDialogViewProtocol]
 RootFactory = Callable[[], TkRootProtocol]
 KeyFileDialogOpener = Callable[[tk.Misc], str]
 DatabasePathDialogOpener = Callable[[tk.Misc], str]
-DatabasePathExists = Callable[[str | PathLike[str]], bool]
+DatabasePathExists = PathExists
 
 
 class EmergencyResetResult(Protocol):
@@ -170,12 +173,13 @@ def database_path_exists(database_path: str | PathLike[str]) -> bool:
 
 
 def open_database_path_dialog(parent: tk.Misc) -> str:
-    """Open the real database-path picker for startup create/open selection."""
+    """Open a database-path picker that supports both existing and new targets."""
     return filedialog.asksaveasfilename(
         parent=parent,
         title="Välj eller ange databassökväg",
         defaultextension=".db",
         filetypes=(("Databasfiler", "*.db"), ("Alla filer", "*.*")),
+        confirmoverwrite=False,
     )
 
 
@@ -193,7 +197,6 @@ class StartupDialogController:
         *,
         presenter: StartupDialogPresenter | None = None,
         view_factory: ViewFactory = StartupDialogView,
-        root_factory: RootFactory = tk.Tk,
         database_path_dialog_opener: DatabasePathDialogOpener = open_database_path_dialog,
         key_file_dialog_opener: KeyFileDialogOpener = open_key_file_dialog,
         database_path_exists: DatabasePathExists = database_path_exists,
@@ -205,28 +208,23 @@ class StartupDialogController:
                 dialect,
                 database_path,
                 fallback_mode,
-                path_exists=database_path_exists,
+                path_exists=cast(PathExists, database_path_exists),
             ),
         )
         self._view_factory = view_factory
-        self._root_factory = root_factory
         self._database_path_dialog_opener = database_path_dialog_opener
         self._key_file_dialog_opener = key_file_dialog_opener
         self._emergency_reset_callback = emergency_reset_callback
 
-        self._root: TkRootProtocol | None = None
         self._view: StartupDialogViewProtocol | None = None
         self._active_mode: StartupDialogMode | None = None
         self._result: StartupDialogSuccess | None = None
         self._pending_migration_submission: StartupDialogSubmission | None = None
         self._migration_running = False
 
-    def run(self) -> StartupDialogSuccess | None:
-        """Run the startup dialog until cancel or successful bootstrap."""
+    def run(self, *, root: TkRootProtocol) -> StartupDialogSuccess | None:
+        """Run the startup dialog beneath the caller-owned root until completion."""
         self._result = None
-        root = self._root_factory()
-        self._root = root
-        root.withdraw()
 
         try:
             view = self._view_factory(cast(tk.Misc, cast(object, root)))
@@ -243,11 +241,6 @@ class StartupDialogController:
         finally:
             self._active_mode = None
             self._view = None
-            try:
-                root.destroy()
-            except tk.TclError:
-                pass
-            self._root = None
 
     def _wire_callbacks(self, view: StartupDialogViewProtocol) -> None:
         view.set_submit_callback(self._handle_submit)
@@ -255,6 +248,7 @@ class StartupDialogController:
         view.set_migrate_callback(self._handle_migrate)
         view.set_browse_database_callback(self._handle_browse_database)
         view.set_browse_key_file_callback(self._handle_browse_key_file)
+        view.set_database_path_changed_callback(self._handle_database_path_changed)
         view.set_target_source_changed_callback(self._handle_target_source_changed)
         view.set_dialect_changed_callback(self._handle_dialect_changed)
 
@@ -353,6 +347,9 @@ class StartupDialogController:
         selected_path = self._key_file_dialog_opener(view.window)
         if selected_path:
             view.set_field_value(StartupFieldName.KEY_FILE_PATH, selected_path)
+
+    def _handle_database_path_changed(self) -> None:
+        self._render_state_from_view()
 
     def _handle_target_source_changed(self) -> None:
         self._render_state_from_view()

@@ -126,7 +126,7 @@ def test_get_initial_state_falls_back_to_create_when_bootstrap_target_is_missing
     state = presenter.get_initial_state()
 
     assert state.mode is StartupDialogMode.CREATE
-    assert state.title == "EventLog - Skapa krypterad databas"
+    assert state.title == "EventLog - Välj eller skapa databas"
     assert state.submit_label == "Skapa"
     assert state.dialect == ""
     assert state.password_policy_hint == "Minst 8 tecken för nytt lösenord."
@@ -139,25 +139,38 @@ def test_get_initial_state_falls_back_to_create_when_bootstrap_target_is_missing
     assert state.backend_fields == ()
 
 
-def test_build_state_for_create_shows_sqlite_fields_only_after_dialect_is_selected() -> None:
+def test_build_state_for_create_stays_target_only_until_sqlite_path_is_selected() -> None:
     presenter = StartupDialogPresenter(_make_config(dialect="", database_path=""))
 
     empty_state = presenter.build_state(mode=StartupDialogMode.CREATE, dialect="")
     sqlite_state = presenter.build_state(mode=StartupDialogMode.CREATE, dialect="sqlite")
+    sqlite_with_path_state = presenter.build_state(
+        mode=StartupDialogMode.CREATE,
+        dialect="sqlite",
+        database_path="C:/Ops/new-eventlog.db",
+    )
 
     assert empty_state.backend_fields == ()
+    assert empty_state.title == "EventLog - Välj eller skapa databas"
     assert empty_state.password_policy_hint == "Minst 8 tecken för nytt lösenord."
 
+    assert sqlite_state.title == "EventLog - Välj eller skapa databas"
     assert [field.field_name for field in sqlite_state.backend_fields] == [
+        StartupFieldName.DATABASE_PATH,
+    ]
+    assert sqlite_state.password_policy_hint == "Minst 8 tecken för nytt lösenord."
+    assert sqlite_state.backend_fields[0].required is True
+    assert sqlite_state.backend_fields[0].kind is StartupFieldKind.FILE_PATH
+
+    assert sqlite_with_path_state.title == "EventLog - Skapa krypterad databas"
+    assert [field.field_name for field in sqlite_with_path_state.backend_fields] == [
         StartupFieldName.DATABASE_PATH,
         StartupFieldName.PASSWORD,
         StartupFieldName.PASSWORD_CONFIRMATION,
         StartupFieldName.KEY_FILE_PATH,
     ]
-    assert sqlite_state.password_policy_hint == "Minst 8 tecken för nytt lösenord."
-    assert sqlite_state.backend_fields[0].required is True
-    assert sqlite_state.backend_fields[0].kind is StartupFieldKind.FILE_PATH
-    assert sqlite_state.backend_fields[-1].required is False
+    assert sqlite_with_path_state.password_policy_hint == "Minst 8 tecken för nytt lösenord."
+    assert sqlite_with_path_state.backend_fields[-1].required is False
 
 
 def test_build_state_for_create_uses_create_policy_not_remembered_unlock_hint_for_key_file_requirement() -> None:
@@ -170,7 +183,11 @@ def test_build_state_for_create_uses_create_policy_not_remembered_unlock_hint_fo
         )
     )
 
-    state = presenter.build_state(mode=StartupDialogMode.CREATE, dialect="sqlite")
+    state = presenter.build_state(
+        mode=StartupDialogMode.CREATE,
+        dialect="sqlite",
+        database_path="C:/Ops/new-eventlog.db",
+    )
 
     assert state.backend_fields[-1].field_name is StartupFieldName.KEY_FILE_PATH
     assert state.backend_fields[-1].required is False
@@ -186,7 +203,11 @@ def test_build_state_for_create_requires_key_file_when_create_policy_demands_it(
         )
     )
 
-    state = presenter.build_state(mode=StartupDialogMode.CREATE, dialect="sqlite")
+    state = presenter.build_state(
+        mode=StartupDialogMode.CREATE,
+        dialect="sqlite",
+        database_path="C:/Ops/new-eventlog.db",
+    )
 
     assert state.backend_fields[-1].required is True
     assert state.backend_fields[-1].field_name is StartupFieldName.KEY_FILE_PATH

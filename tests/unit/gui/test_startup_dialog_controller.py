@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
+import tkinter as tk
 from typing import cast
 
 import pytest
@@ -12,7 +13,7 @@ import src.app as app_module
 from src.config import DatabaseConfig, load_app_config
 from src.core import ResetFollowUpIssue
 from src.db.repositories.base_repository import BaseRepository
-from src.db.repositories.startup_selection import StartupFieldKind, StartupFieldName, StartupFieldRequirement
+from src.db.repositories.startup_selection import PathExists, StartupFieldKind, StartupFieldName, StartupFieldRequirement
 from src.db.repositories.startup_bootstrap import (
     BackendCleanupError,
     BackendCleanupOutcome,
@@ -28,9 +29,17 @@ from src.gui.presenters.startup_dialog_presenter import (
     StartupDialogPresenter,
     StartupDialogState,
     StartupDialogSubmission,
+    StartupDialogSuccess,
     resolve_startup_mode,
 )
-from src.gui.startup_dialog_controller import StartupDialogController, StartupDialogViewProtocol
+from src.gui.app_shell import AppShell, MainWindowFactory, StartupControllerFactory
+from src.gui.startup_dialog_controller import (
+    EmergencyResetCallback,
+    StartupDialogController,
+    StartupDialogViewProtocol,
+    TkRootProtocol,
+    open_database_path_dialog,
+)
 from src.security import ResetFailureCategory, ResetOutcome
 
 
@@ -40,9 +49,12 @@ pytestmark = pytest.mark.unit
 class FakeRoot:
     def __init__(self) -> None:
         self.withdraw_called = False
+        self.deiconify_called = False
+        self.mainloop_called = False
         self.destroy_called = False
         self.waited_window: object | None = None
         self.on_wait_window: Callable[[], None] | None = None
+        self.on_mainloop: Callable[[], None] | None = None
 
     def withdraw(self) -> None:
         self.withdraw_called = True
@@ -51,6 +63,14 @@ class FakeRoot:
         self.waited_window = window
         if self.on_wait_window is not None:
             self.on_wait_window()
+
+    def deiconify(self) -> None:
+        self.deiconify_called = True
+
+    def mainloop(self) -> None:
+        self.mainloop_called = True
+        if self.on_mainloop is not None:
+            self.on_mainloop()
 
     def destroy(self) -> None:
         self.destroy_called = True
@@ -98,6 +118,7 @@ class FakeView:
         self.emergency_reset_callback = None
         self.browse_database_callback = None
         self.browse_key_file_callback = None
+        self.database_path_changed_callback = None
         self.mode_changed_callback = None
         self.target_source_changed_callback = None
         self.dialect_changed_callback = None
@@ -153,6 +174,9 @@ class FakeView:
     def set_browse_key_file_callback(self, callback) -> None:
         self.browse_key_file_callback = callback
 
+    def set_database_path_changed_callback(self, callback) -> None:
+        self.database_path_changed_callback = callback
+
     def set_mode_changed_callback(self, callback) -> None:
         self.mode_changed_callback = callback
 
@@ -192,6 +216,30 @@ class ControllerHarness:
     root: FakeRoot
     view: FakeView
     controller: StartupDialogController
+
+    def run(self) -> StartupDialogSuccess | None:
+        return self.controller.run(root=self.root)
+
+
+class FakeStartupDialogRunner:
+    def __init__(self, result: StartupDialogSuccess | None) -> None:
+        self.result = result
+        self.received_root: TkRootProtocol | None = None
+
+    def run(self, *, root: TkRootProtocol) -> StartupDialogSuccess | None:
+        self.received_root = root
+        return self.result
+
+
+class FakeMainWindowFactory:
+    def __init__(self) -> None:
+        self.received_root: object | None = None
+        self.received_startup_result: StartupDialogSuccess | None = None
+
+    def __call__(self, root, startup_result: StartupDialogSuccess) -> object:
+        self.received_root = root
+        self.received_startup_result = startup_result
+        return object()
 
 
 @dataclass(frozen=True)
@@ -234,7 +282,7 @@ def _make_presenter(
     *,
     bootstrap_result: BootstrapRepositoryResult | None = None,
     migration_result: object | None = None,
-    database_path_exists: Callable[[str | PathLike[str]], bool] | None = None,
+    database_path_exists: PathExists | None = None,
 ) -> StartupDialogPresenter:
     resolved_database_path_exists = (
         _database_path_does_not_exist if database_path_exists is None else database_path_exists
@@ -249,7 +297,7 @@ def _make_presenter(
             dialect,
             database_path,
             fallback_mode,
-            path_exists=resolved_database_path_exists,
+            path_exists=cast(PathExists, resolved_database_path_exists),
         )
 
     if bootstrap_result is None:
@@ -306,7 +354,7 @@ def _make_harness(
     bootstrap_result: BootstrapRepositoryResult | None = None,
     migration_result: object | None = None,
     database_path_dialog_result: str = "",
-    database_path_exists: Callable[[str | PathLike[str]], bool] | None = None,
+    database_path_exists: PathExists | None = None,
     key_file_dialog_result: str = "",
     emergency_reset_callback: Callable[[], object] | None = None,
 ) -> ControllerHarness:
@@ -325,7 +373,6 @@ def _make_harness(
     controller = StartupDialogController(
         database_config,
         presenter=presenter,
-        root_factory=lambda: root,
         view_factory=lambda _master: cast(StartupDialogViewProtocol, cast(object, view)),
         database_path_dialog_opener=lambda _parent: database_path_dialog_result,
         database_path_exists=resolved_database_path_exists,
@@ -373,12 +420,14 @@ def test_run_renders_initial_create_state_and_focuses_primary_input() -> None:
         ),
     )
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
-    assert harness.root.withdraw_called is True
-    assert harness.root.destroy_called is True
+    assert harness.root.waited_window is harness.view.window
+    assert harness.root.withdraw_called is False
+    assert harness.root.destroy_called is False
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
+    assert harness.view.rendered_states[-1].title == "EventLog - Välj eller skapa databas"
     assert harness.view.clear_error_message_calls == 1
     assert harness.view.focus_calls == 1
     assert harness.view.submit_callback is not None
@@ -386,9 +435,123 @@ def test_run_renders_initial_create_state_and_focuses_primary_input() -> None:
     assert harness.view.migrate_callback is not None
     assert harness.view.browse_database_callback is not None
     assert harness.view.browse_key_file_callback is not None
+    assert harness.view.database_path_changed_callback is not None
     assert harness.view.mode_changed_callback is None
     assert harness.view.target_source_changed_callback is not None
     assert harness.view.dialect_changed_callback is not None
+
+
+def test_run_with_caller_owned_root_uses_provided_root_without_destroying_it() -> None:
+    sentinel_repository = cast(BaseRepository, object())
+    harness = _make_harness(
+        database_config=DatabaseConfig(
+            dialect="sqlite",
+            database_path="eventlog.db",
+        ),
+        submission=_make_submission(
+            mode=StartupDialogMode.UNLOCK,
+            dialect="sqlite",
+            database_path="eventlog.db",
+            password="lösenord123",
+            uses_remembered_target=True,
+        ),
+        bootstrap_result=BootstrapRepositoryResult(repository=sentinel_repository),
+        database_path_exists=lambda path: path == "eventlog.db",
+    )
+    harness.root.on_wait_window = lambda: harness.view.submit_callback()
+
+    result = harness.run()
+
+    assert result is not None
+    assert result.repository is sentinel_repository
+    assert harness.root.withdraw_called is False
+    assert harness.root.destroy_called is False
+    assert harness.root.waited_window is harness.view.window
+    assert harness.view.destroy_called is True
+
+
+def test_app_shell_keeps_root_alive_after_successful_startup_until_main_window_runs() -> None:
+    database_config = DatabaseConfig(
+        dialect="sqlite",
+        database_path="C:/Ops/eventlog.db",
+    )
+    root = FakeRoot()
+    sentinel_result = app_module.StartupDialogSuccess(
+        repository=object(),
+        remembered_target=database_config.bootstrap_target,
+    )
+    runner = FakeStartupDialogRunner(sentinel_result)
+    main_window_factory = FakeMainWindowFactory()
+    captured: dict[str, object] = {}
+
+    def _startup_controller_factory(
+        config: DatabaseConfig,
+        *,
+        emergency_reset_callback: EmergencyResetCallback | None = None,
+    ) -> FakeStartupDialogRunner:
+        captured["config"] = config
+        captured["emergency_reset_callback"] = emergency_reset_callback
+        return runner
+
+    shell = AppShell(
+        root_factory=lambda: root,
+        startup_controller_factory=cast(
+            StartupControllerFactory,
+            cast(object, _startup_controller_factory),
+        ),
+        main_window_factory=cast(MainWindowFactory, cast(object, main_window_factory)),
+    )
+
+    result = shell.run_startup_dialog(database_config)
+    assert result is sentinel_result
+
+    shell.show_main_window(sentinel_result)
+
+    assert captured == {
+        "config": database_config,
+        "emergency_reset_callback": None,
+    }
+    assert root.withdraw_called is True
+    assert root.deiconify_called is True
+    assert root.mainloop_called is True
+    assert root.destroy_called is True
+    assert runner.received_root is root
+    assert main_window_factory.received_root is root
+    assert main_window_factory.received_startup_result is sentinel_result
+
+
+def test_app_shell_destroys_root_after_cancelled_startup() -> None:
+    database_config = DatabaseConfig(
+        dialect="sqlite",
+        database_path="C:/Ops/eventlog.db",
+    )
+    root = FakeRoot()
+    runner = FakeStartupDialogRunner(None)
+
+    def _startup_controller_factory(
+        _config: DatabaseConfig,
+        *,
+        emergency_reset_callback: EmergencyResetCallback | None = None,
+    ) -> FakeStartupDialogRunner:
+        assert emergency_reset_callback is None
+        return runner
+
+    shell = AppShell(
+        root_factory=lambda: root,
+        startup_controller_factory=cast(
+            StartupControllerFactory,
+            cast(object, _startup_controller_factory),
+        ),
+    )
+
+    result = shell.run_startup_dialog(database_config)
+
+    assert result is None
+    assert root.withdraw_called is True
+    assert root.deiconify_called is False
+    assert root.mainloop_called is False
+    assert root.destroy_called is True
+    assert runner.received_root is root
 
 
 def test_dialect_selection_reveals_backend_fields_after_initial_blank_state() -> None:
@@ -410,10 +573,81 @@ def test_dialect_selection_reveals_backend_fields_after_initial_blank_state() ->
 
     harness.root.on_wait_window = _select_sqlite
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[0].backend_fields == ()
     assert harness.view.rendered_states[-1].dialect == "sqlite"
+    assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
+    assert _field_names(harness.view.rendered_states[-1]) == [
+        StartupFieldName.DATABASE_PATH,
+        StartupFieldName.PASSWORD,
+        StartupFieldName.PASSWORD_CONFIRMATION,
+        StartupFieldName.KEY_FILE_PATH,
+    ]
+    assert harness.view.clear_error_message_calls == 2
+    assert harness.view.focus_calls == 2
+
+
+def test_dialect_selection_without_target_path_keeps_create_state_target_only() -> None:
+    harness = _make_harness(
+        database_config=DatabaseConfig(),
+        submission=_make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="",
+            database_path="",
+            password="lösenord123",
+            password_confirmation="lösenord123",
+        ),
+    )
+
+    def _select_sqlite_without_path() -> None:
+        harness.view.dialect_var.set("sqlite")
+        harness.view.dialect_changed_callback()
+
+    harness.root.on_wait_window = _select_sqlite_without_path
+
+    harness.run()
+
+    assert harness.view.rendered_states[0].backend_fields == ()
+    assert harness.view.rendered_states[-1].dialect == "sqlite"
+    assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
+    assert harness.view.rendered_states[-1].title == "EventLog - Välj eller skapa databas"
+    assert _field_names(harness.view.rendered_states[-1]) == [
+        StartupFieldName.DATABASE_PATH,
+    ]
+    assert harness.view.clear_error_message_calls == 2
+    assert harness.view.focus_calls == 2
+
+
+def test_manual_database_path_entry_reveals_create_password_fields_without_browse_dialog() -> None:
+    harness = _make_harness(
+        database_config=DatabaseConfig(
+            dialect="sqlite",
+            database_path="",
+        ),
+        submission=_make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            database_path="",
+            password="lösenord123",
+            password_confirmation="lösenord123",
+        ),
+    )
+
+    def _type_database_path_manually() -> None:
+        harness.view.set_field_value(StartupFieldName.DATABASE_PATH, "C:/Ops/new-eventlog.db")
+        harness.view.database_path_changed_callback()
+
+    harness.root.on_wait_window = _type_database_path_manually
+
+    harness.run()
+
+    assert harness.view.rendered_states[0].dialect == "sqlite"
+    assert harness.view.rendered_states[0].mode is StartupDialogMode.CREATE
+    assert _field_names(harness.view.rendered_states[0]) == [
+        StartupFieldName.DATABASE_PATH,
+    ]
+    assert harness.view.rendered_states[-1].database_path == "C:/Ops/new-eventlog.db"
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
     assert _field_names(harness.view.rendered_states[-1]) == [
         StartupFieldName.DATABASE_PATH,
@@ -441,7 +675,7 @@ def test_run_falls_back_to_create_when_remembered_sqlite_target_no_longer_exists
         database_path_exists=lambda _path: False,
     )
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
     assert harness.view.rendered_states[-1].title == "EventLog - Skapa krypterad databas"
@@ -464,7 +698,7 @@ def test_unlock_state_hides_emergency_reset_when_no_callback_is_configured() -> 
         database_path_exists=lambda path: path == "eventlog.db",
     )
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
     assert harness.view.rendered_states[-1].allow_emergency_reset is False
@@ -492,7 +726,7 @@ def test_target_source_change_switches_unlock_view_to_manual_target_fields() -> 
 
     harness.root.on_wait_window = _switch_to_manual_target
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[0].uses_remembered_target is True
     assert harness.view.rendered_states[-1].uses_remembered_target is False
@@ -526,7 +760,7 @@ def test_existing_database_selection_does_not_reuse_create_key_file_policy() -> 
 
     harness.root.on_wait_window = _select_existing_database
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
     assert _field_names(harness.view.rendered_states[-1]) == [
@@ -561,7 +795,7 @@ def test_new_database_selection_uses_create_policy_not_remembered_unlock_hint() 
 
     harness.root.on_wait_window = _select_new_database
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[0].backend_fields[-1].required is True
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
@@ -593,7 +827,7 @@ def test_submit_failure_shows_error_and_clears_passwords_when_presenter_requests
     )
     harness.root.on_wait_window = lambda: harness.view.submit_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.submission_modes == [StartupDialogMode.UNLOCK]
@@ -627,7 +861,7 @@ def test_submit_failure_shows_presenter_owned_migration_guidance_instead_of_back
     )
     harness.root.on_wait_window = lambda: harness.view.submit_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.error_messages == [
@@ -661,7 +895,7 @@ def test_submit_failure_with_migration_needed_exposes_dedicated_migrate_action()
     )
     harness.root.on_wait_window = lambda: harness.view.submit_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.rendered_states[-1].show_migration_action is True
@@ -702,7 +936,7 @@ def test_migrate_action_runs_presenter_migration_and_shows_success_status() -> N
 
     harness.root.on_wait_window = _submit_then_migrate
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.status_messages == ["Databasmigreringen slutfördes."]
@@ -731,7 +965,7 @@ def test_submit_success_closes_dialog_and_returns_startup_success() -> None:
     )
     harness.root.on_wait_window = lambda: harness.view.submit_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is not None
     assert result.repository is sentinel_repository
@@ -754,7 +988,7 @@ def test_cancel_closes_dialog_without_result() -> None:
     )
     harness.root.on_wait_window = lambda: harness.view.cancel_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.destroy_called is True
@@ -778,7 +1012,7 @@ def test_emergency_reset_success_closes_dialog_after_clearing_sensitive_fields()
     )
     harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.clear_sensitive_fields_args == [True]
@@ -811,7 +1045,7 @@ def test_emergency_reset_failure_shows_sanitized_follow_up_message_and_keeps_dia
     )
     harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.clear_sensitive_fields_args == [True]
@@ -843,7 +1077,7 @@ def test_emergency_reset_failure_can_append_manual_key_file_advisory() -> None:
     )
     harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.error_messages == [
@@ -873,7 +1107,7 @@ def test_emergency_reset_success_does_not_show_manual_key_file_advisory_in_first
     )
     harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
 
-    result = harness.controller.run()
+    result = harness.run()
 
     assert result is None
     assert harness.view.error_messages == []
@@ -895,9 +1129,33 @@ def test_browse_key_file_updates_view_path_when_file_is_selected() -> None:
     )
     harness.root.on_wait_window = lambda: harness.view.browse_key_file_callback()
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.get_field_value(StartupFieldName.KEY_FILE_PATH) == "C:/keys/startup.key"
+
+
+def test_open_database_path_dialog_suppresses_overwrite_confirmation_for_existing_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_asksaveasfilename(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return "C:/Ops/eventlog.db"
+
+    monkeypatch.setattr("src.gui.startup_dialog_controller.filedialog.asksaveasfilename", fake_asksaveasfilename)
+
+    parent = cast(tk.Misc, object())
+    selected_path = open_database_path_dialog(parent)
+
+    assert selected_path == "C:/Ops/eventlog.db"
+    assert captured == {
+        "parent": parent,
+        "title": "Välj eller ange databassökväg",
+        "defaultextension": ".db",
+        "filetypes": (("Databasfiler", "*.db"), ("Alla filer", "*.*")),
+        "confirmoverwrite": False,
+    }
 
 
 def test_browse_database_switches_to_unlock_when_selected_database_exists() -> None:
@@ -920,7 +1178,7 @@ def test_browse_database_switches_to_unlock_when_selected_database_exists() -> N
 
     harness.root.on_wait_window = _select_sqlite_and_browse_database
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.get_field_value(StartupFieldName.DATABASE_PATH) == "C:/Ops/eventlog.db"
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
@@ -947,7 +1205,7 @@ def test_browse_database_switches_to_create_when_selected_database_does_not_exis
     )
     harness.root.on_wait_window = lambda: harness.view.browse_database_callback()
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.get_field_value(StartupFieldName.DATABASE_PATH) == "C:/Ops/new-eventlog.db"
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
@@ -979,7 +1237,7 @@ def test_database_path_rerender_preserves_other_visible_backend_field_values() -
 
     harness.root.on_wait_window = _select_sqlite_and_browse_database
 
-    harness.controller.run()
+    harness.run()
 
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
     assert harness.view.get_field_value(StartupFieldName.PASSWORD) == "lösenord123"
@@ -1010,7 +1268,6 @@ def test_dialect_change_delegates_state_recomputation_to_presenter_instead_of_co
     controller = StartupDialogController(
         DatabaseConfig(),
         presenter=cast(StartupDialogPresenter, cast(object, spy_presenter)),
-        root_factory=lambda: root,
         view_factory=lambda _master: cast(StartupDialogViewProtocol, cast(object, view)),
         database_path_exists=lambda _path: (_ for _ in ()).throw(
             AssertionError("controller should not perform startup mode inference")
@@ -1024,7 +1281,7 @@ def test_dialect_change_delegates_state_recomputation_to_presenter_instead_of_co
 
     root.on_wait_window = _change_dialect
 
-    controller.run()
+    controller.run(root=root)
 
     assert spy_presenter.recompute_calls == [
         _make_submission(
@@ -1743,7 +2000,7 @@ log_file_backup_count = 0
     assert log_path.exists() is True
 
 
-def test_run_app_loads_config_and_runs_startup_controller(monkeypatch) -> None:
+def test_run_app_loads_config_and_shows_main_window_after_successful_startup(monkeypatch) -> None:
     database_config = DatabaseConfig(
         dialect="sqlite",
         database_path="eventlog.db",
@@ -1759,19 +2016,24 @@ def test_run_app_loads_config_and_runs_startup_controller(monkeypatch) -> None:
     captured: dict[str, object] = {}
     persisted: dict[str, object] = {}
 
-    class FakeController:
-        def __init__(
+    class FakeAppShell:
+        def run_startup_dialog(
             self,
             config: DatabaseConfig,
             *,
             emergency_reset_callback=None,
-        ) -> None:
+        ):
             captured["config"] = config
             captured["emergency_reset_callback"] = emergency_reset_callback
-
-        def run(self):
             captured["run_called"] = True
             return sentinel_result
+
+        def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+            captured["show_main_window_called"] = True
+            captured["main_window_startup_result"] = startup_result
+
+        def close(self) -> None:
+            captured["close_called"] = True
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
     monkeypatch.setattr(
@@ -1779,7 +2041,7 @@ def test_run_app_loads_config_and_runs_startup_controller(monkeypatch) -> None:
         "resolve_runtime_database_config",
         lambda loaded_config, *, config_path: runtime_database_config,
     )
-    monkeypatch.setattr(app_module, "StartupDialogController", FakeController)
+    monkeypatch.setattr(app_module, "AppShell", FakeAppShell)
     monkeypatch.setattr(
         app_module,
         "save_bootstrap_target_config",
@@ -1797,6 +2059,8 @@ def test_run_app_loads_config_and_runs_startup_controller(monkeypatch) -> None:
         "config": runtime_database_config,
         "emergency_reset_callback": captured["emergency_reset_callback"],
         "run_called": True,
+        "show_main_window_called": True,
+        "main_window_startup_result": sentinel_result,
     }
     assert callable(captured["emergency_reset_callback"])
     assert persisted == {
@@ -1817,18 +2081,22 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
     )
     persisted: list[tuple[object, object]] = []
 
-    class FakeController:
-        def __init__(
+    class FakeAppShell:
+        def run_startup_dialog(
             self,
             config: DatabaseConfig,
             *,
             emergency_reset_callback=None,
-        ) -> None:
+        ):
             assert config == runtime_database_config
             assert callable(emergency_reset_callback)
-
-        def run(self):
             return None
+
+        def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+            raise AssertionError(f"show_main_window should not be called: {startup_result!r}")
+
+        def close(self) -> None:
+            raise AssertionError("close should not be called for cancelled startup")
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
     monkeypatch.setattr(
@@ -1836,7 +2104,7 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
         "resolve_runtime_database_config",
         lambda loaded_config, *, config_path: runtime_database_config,
     )
-    monkeypatch.setattr(app_module, "StartupDialogController", FakeController)
+    monkeypatch.setattr(app_module, "AppShell", FakeAppShell)
     monkeypatch.setattr(
         app_module,
         "save_bootstrap_target_config",
@@ -1857,19 +2125,23 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
     runtime_database_config = DatabaseConfig(dialect="", database_path="")
     captured: dict[str, object] = {}
 
-    class FakeController:
-        def __init__(
+    class FakeAppShell:
+        def run_startup_dialog(
             self,
             config: DatabaseConfig,
             *,
             emergency_reset_callback=None,
-        ) -> None:
+        ):
             captured["config"] = config
             captured["emergency_reset_callback"] = emergency_reset_callback
-
-        def run(self):
             captured["run_called"] = True
             return None
+
+        def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+            raise AssertionError(f"show_main_window should not be called: {startup_result!r}")
+
+        def close(self) -> None:
+            raise AssertionError("close should not be called when startup is cancelled")
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
     monkeypatch.setattr(
@@ -1877,7 +2149,7 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
         "resolve_runtime_database_config",
         lambda loaded_config, *, config_path: runtime_database_config,
     )
-    monkeypatch.setattr(app_module, "StartupDialogController", FakeController)
+    monkeypatch.setattr(app_module, "AppShell", FakeAppShell)
 
     result = app_module.run_app()
 
@@ -1887,7 +2159,5 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
         "emergency_reset_callback": None,
         "run_called": True,
     }
-
-
 
 

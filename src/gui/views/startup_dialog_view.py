@@ -58,6 +58,7 @@ class StartupDialogView:
         self._emergency_reset_callback: VoidCallback | None = None
         self._browse_database_callback: VoidCallback | None = None
         self._browse_key_file_callback: VoidCallback | None = None
+        self._database_path_changed_callback: VoidCallback | None = None
         self._mode_changed_callback: VoidCallback | None = None
         self._target_source_changed_callback: VoidCallback | None = None
         self._dialect_changed_callback: VoidCallback | None = None
@@ -125,7 +126,7 @@ class StartupDialogView:
         self.use_remembered_target_button.grid(row=0, column=0, sticky=tk.W, pady=(0, 4))
         self.use_manual_target_button = ttk.Radiobutton(
             self.target_source_row,
-            text="Välj befintlig databas manuellt",
+            text="Välj eller ange databas manuellt",
             value=False,
             variable=self.use_remembered_target_var,
             command=self._handle_target_source_changed,
@@ -213,7 +214,8 @@ class StartupDialogView:
         self.mode_var.set(state.mode.value)
         self.use_remembered_target_var.set(state.uses_remembered_target)
         self.dialect_var.set(state.dialect)
-        self.set_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
+        if self.get_field_value(StartupFieldName.DATABASE_PATH) != state.database_path:
+            self.set_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
         self.password_policy_hint_label.configure(text=state.password_policy_hint)
         self._set_modes(state.available_modes)
 
@@ -239,7 +241,8 @@ class StartupDialogView:
                 )
 
             if requirement.field_name is StartupFieldName.DATABASE_PATH:
-                self.set_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
+                if self.get_field_value(StartupFieldName.DATABASE_PATH) != state.database_path:
+                    self.set_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
 
             visible_field_names.append(requirement.field_name)
             if self._field_belongs_in_database_section(requirement.field_name):
@@ -318,6 +321,10 @@ class StartupDialogView:
     def set_browse_key_file_callback(self, callback: VoidCallback) -> None:
         """Register the browse-key-file action callback."""
         self._browse_key_file_callback = callback
+
+    def set_database_path_changed_callback(self, callback: VoidCallback) -> None:
+        """Register the manual database-path edit callback."""
+        self._database_path_changed_callback = callback
 
     def set_mode_changed_callback(self, callback: VoidCallback) -> None:
         """Register the mode-selector change callback."""
@@ -408,6 +415,10 @@ class StartupDialogView:
         if self._browse_key_file_callback is not None:
             self._browse_key_file_callback()
 
+    def _handle_database_path_changed(self, _event: object | None = None) -> None:
+        if self._database_path_changed_callback is not None:
+            self._database_path_changed_callback()
+
     def _handle_mode_changed(self) -> None:
         if self._mode_changed_callback is not None:
             self._mode_changed_callback()
@@ -448,6 +459,8 @@ class StartupDialogView:
             show="*" if self._field_uses_password_mask(field_name) else "",
         )
         entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 6))
+        if field_name is StartupFieldName.DATABASE_PATH:
+            entry.bind("<KeyRelease>", self._handle_database_path_changed)
 
         browse_button: ttk.Button | None = None
         if field_name in {StartupFieldName.DATABASE_PATH, StartupFieldName.KEY_FILE_PATH}:

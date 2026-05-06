@@ -320,10 +320,18 @@ class StartupDialogPresenter:
                 False,
                 self._require_key_file_policy_for_mode(mode),
             )
+            backend_fields = self._filter_create_fields_for_unselected_sqlite_target(
+                dialect=resolved_dialect,
+                database_path=resolved_database_path,
+                backend_fields=backend_fields,
+            )
 
             return StartupDialogState(
                 mode=mode,
-                title="EventLog - Skapa krypterad databas",
+                title=self._build_create_title(
+                    dialect=resolved_dialect,
+                    database_path=resolved_database_path,
+                ),
                 submit_label="Skapa",
                 dialect=resolved_dialect,
                 database_path=resolved_database_path,
@@ -369,6 +377,31 @@ class StartupDialogPresenter:
             show_target_source_selector=remembered_target_is_available,
             show_dialect_picker=not resolved_use_remembered_target,
             backend_fields=backend_fields,
+        )
+
+    @staticmethod
+    def _build_create_title(*, dialect: str, database_path: str) -> str:
+        """Return create-state title text for the current startup context."""
+        if not database_path:
+            return "EventLog - Välj eller skapa databas"
+
+        return "EventLog - Skapa krypterad databas"
+
+    @staticmethod
+    def _filter_create_fields_for_unselected_sqlite_target(
+        *,
+        dialect: str,
+        database_path: str,
+        backend_fields: tuple[StartupFieldRequirement, ...],
+    ) -> tuple[StartupFieldRequirement, ...]:
+        """Hide create-only access fields until a SQLite target path is chosen."""
+        if dialect != "sqlite" or database_path:
+            return backend_fields
+
+        return tuple(
+            field
+            for field in backend_fields
+            if field.field_name is StartupFieldName.DATABASE_PATH
         )
 
     def submit(self, submission: StartupDialogSubmission) -> StartupDialogSubmissionResult:

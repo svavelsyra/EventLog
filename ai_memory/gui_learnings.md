@@ -2,7 +2,7 @@
 
 **Purpose**: Tkinter-specific lessons, common pitfalls, and implementation patterns learned during GUI development.
 
-**Last Updated**: 2026-05-04 (Session 068 - Added startup architecture completion guardrail)
+**Last Updated**: 2026-05-06 (Session 094 - Added startup database picker overwrite-suppression guardrail)
 
 ## Tkinter Grid Layout
 
@@ -117,4 +117,15 @@ self.root.geometry(f"{width}x{height}+{x}+{y}")
 - When a remaining startup-area architectural mismatch is already identified and new work would otherwise accumulate on top of it, do not accept “works for now” as sufficient justification to leave it in place.
 - For startup refactors, prefer the next durable ownership-alignment slice over a smaller tactical patch if the smaller patch would knowingly preserve a mismatch that future work will build on.
 - The user wants restart-ready session guidance that names the exact next architectural slice, so a future AI can continue with a simple “go on” prompt instead of rediscovering the intended direction.
+
+## Session 092 - Model Presenter-Shaped Neutral Startup States Explicitly In View Tests
+
+- When a Tk view test needs to verify a narrow startup state that depends on presenter filtering (for example blank-path SQLite create showing only the target field), prefer constructing an explicit `StartupDialogState` over reusing a broad helper whose defaults may include extra fields.
+- For startup view coverage, helper builders are still useful for common full-form states, but presenter-specific neutral states should be modeled directly so the test cannot accidentally drift away from the presenter contract.
+
+## Session 094 - Startup Database Picker Must Allow Existing Or New Paths Without Save-Dialog Nagging
+
+- For the startup database target picker, do not switch to `askopenfilename()` just to avoid the native overwrite prompt; that would break the create-new-database path selection flow.
+- Prefer the save-style Tk dialog with `confirmoverwrite=False` so operators can select an existing database or specify a new database path from the same browse action without getting the misleading Windows "overwrite?" confirmation.
+- When the same manual-target control supports both open and create inference, keep the nearby Swedish UI copy neutral (for example `Välj eller ange databas manuellt`) instead of promising only existing-database selection.
 
