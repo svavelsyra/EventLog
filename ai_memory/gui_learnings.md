@@ -2,7 +2,7 @@
 
 **Purpose**: Tkinter-specific lessons, common pitfalls, and implementation patterns learned during GUI development.
 
-**Last Updated**: 2026-05-06 (Session 094 - Added startup database picker overwrite-suppression guardrail)
+**Last Updated**: 2026-05-06 (Session 096 - Added GUI reset integration-test pattern)
 
 ## Tkinter Grid Layout
 
@@ -128,4 +128,21 @@ self.root.geometry(f"{width}x{height}+{x}+{y}")
 - For the startup database target picker, do not switch to `askopenfilename()` just to avoid the native overwrite prompt; that would break the create-new-database path selection flow.
 - Prefer the save-style Tk dialog with `confirmoverwrite=False` so operators can select an existing database or specify a new database path from the same browse action without getting the misleading Windows "overwrite?" confirmation.
 - When the same manual-target control supports both open and create inference, keep the nearby Swedish UI copy neutral (for example `Välj eller ange databas manuellt`) instead of promising only existing-database selection.
+
+## Session 096 - Main-Window Shell Lifecycle Belongs To App-Owned Callbacks
+
+- When the visible main window needs top-level lifecycle behavior such as `Nollställ` or `WM_DELETE_WINDOW`, keep the shell view thin: it should register button/protocol callbacks and display coarse status only.
+- Destructive reset must continue to flow through the existing app-owned reset seam (`run_active_context_reset` or an equivalent wrapper), not a widget-local cleanup implementation.
+- Normal shell close should use a separate app-owned invalidate/release seam from destructive reset so the GUI does not blur ordinary shutdown with data-destruction behavior.
+- A practical small-slice pattern is: app builds lifecycle callbacks, `AppShell` passes them into `MainWindowShellView`, and the view treats a returned status string as coarse operator feedback while successful callbacks close through app-shell ownership.
+
+## Session 096 - GUI Reset Integration Tests Should Drive Real Buttons Through App-Owned Callbacks
+
+- For reset UI integration coverage, prefer one small Tk subprocess-backed slice that clicks the real GUI buttons and asserts filesystem/config side effects afterward from the parent test process.
+- Use `tests.gui_support.run_isolated_tk_scenario` for Tk isolation, but keep scenario callables top-level and spawn-safe.
+- For startup reset coverage, a durable seam is the real `StartupDialogController` with a captured real `StartupDialogView` plus the app-owned startup emergency-reset callback.
+- For main-window reset coverage, a durable seam is `MainWindowShellView` with the real app-owned reset callback and a minimal shell spy that records whether close ownership was invoked.
+- When scheduling one-shot Tk actions inside these subprocess scenarios, an explicit `after(..., callback, "scheduled")` argument shape can satisfy the type checker more reliably than a bare callback.
+- For startup-dialog reset failures, make the integration scenario capture whether the dialog was still open immediately after the button click before any forced cleanup; otherwise the test can accidentally assert only its own teardown behavior instead of the real UI contract.
+- A verified reset contract worth preserving in integration tests: after active-context access denial succeeds, remembered bootstrap selectors are still cleared even if a later backend-cleanup phase fails. Later cleanup failures should keep the shell open and report follow-up work, but they do not roll back the selector clear.
 

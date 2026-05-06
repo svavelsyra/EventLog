@@ -21,6 +21,9 @@ from src.gui.startup_dialog_controller import (
 from src.gui.views.main_window_shell_view import MainWindowShellView
 
 
+MainWindowLifecycleCallback = Callable[[], str | None]
+
+
 class AppShellRootProtocol(TkRootProtocol, Protocol):
     """Minimal root contract needed across startup hosting and visible shell."""
 
@@ -57,6 +60,9 @@ class MainWindowFactory(Protocol):
         self,
         root: tk.Tk,
         startup_result: StartupDialogSuccess,
+        *,
+        reset_callback: MainWindowLifecycleCallback | None = None,
+        close_callback: MainWindowLifecycleCallback | None = None,
     ) -> object:
         """Build the visible main-window shell on the app-owned root."""
 
@@ -76,10 +82,17 @@ def _create_startup_controller(
 def _create_main_window_shell(
     root: tk.Tk,
     startup_result: StartupDialogSuccess,
+    *,
+    reset_callback: MainWindowLifecycleCallback | None = None,
+    close_callback: MainWindowLifecycleCallback | None = None,
 ) -> object:
     """Build the real minimal visible main-window shell."""
     del startup_result
-    return MainWindowShellView(root)
+    return MainWindowShellView(
+        root,
+        reset_callback=reset_callback,
+        close_callback=close_callback,
+    )
 
 
 class AppShell:
@@ -123,12 +136,20 @@ class AppShell:
 
         return result
 
-    def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+    def show_main_window(
+        self,
+        startup_result: StartupDialogSuccess,
+        *,
+        reset_callback: MainWindowLifecycleCallback | None = None,
+        close_callback: MainWindowLifecycleCallback | None = None,
+    ) -> None:
         """Turn the app-owned root into the visible main-window shell."""
         root = self._require_root()
         self._main_window = self._main_window_factory(
             cast(tk.Tk, cast(object, root)),
             startup_result,
+            reset_callback=reset_callback,
+            close_callback=close_callback,
         )
         root.deiconify()
 
@@ -154,18 +175,21 @@ class AppShell:
         if self._root is None:
             self._root = cast(AppShellRootProtocol, self._root_factory())
 
+        assert self._root is not None
         return self._root
 
     def _require_root(self) -> AppShellRootProtocol:
         if self._root is None:
             raise RuntimeError("App shell root is not available.")
 
+        assert self._root is not None
         return self._root
 
 
 __all__ = [
     "AppShell",
     "AppShellRootProtocol",
+    "MainWindowLifecycleCallback",
     "MainWindowFactory",
     "StartupControllerFactory",
     "StartupDialogRunner",

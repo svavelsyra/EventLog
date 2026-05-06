@@ -7,15 +7,30 @@ workflows, destructive actions, and richer status behavior remain later stories.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
+
+
+ShellActionCallback = Callable[[], str | None]
 
 
 class MainWindowShellView:
     """Render the minimal production-owned main window shell on the Tk root."""
 
-    def __init__(self, root: tk.Tk) -> None:
+    _DEFAULT_STATUS_TEXT = "Statusyta - loggning och operatörsstatus kommer senare."
+
+    def __init__(
+        self,
+        root: tk.Tk,
+        *,
+        reset_callback: ShellActionCallback | None = None,
+        close_callback: ShellActionCallback | None = None,
+    ) -> None:
         self.root = root
+        self._reset_callback = reset_callback
+        self._close_callback = close_callback
         self.root.title("EventLog - Pluton Event Logger")
         self.root.minsize(800, 600)
         self.root.geometry("1200x700")
@@ -31,6 +46,28 @@ class MainWindowShellView:
             anchor="w",
         )
         self.toolbar_label.grid(row=0, column=0, sticky=tk.W)
+        default_button_font = tkfont.nametofont("TkDefaultFont").copy()
+        default_button_font.configure(weight="bold")
+        self._reset_button_font = default_button_font
+        self.reset_button = tk.Button(
+            self.toolbar_frame,
+            text="Nollställ",
+            command=self.handle_reset_requested,
+            font=self._reset_button_font,
+            background="#c62828",
+            foreground="#ffffff",
+            activebackground="#8e0000",
+            activeforeground="#ffffff",
+            highlightbackground="#c62828",
+            highlightcolor="#8e0000",
+            highlightthickness=1,
+            borderwidth=2,
+            relief=tk.RAISED,
+            cursor="hand2",
+            padx=12,
+            pady=6,
+        )
+        self.reset_button.grid(row=0, column=1, sticky=tk.E)
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.grid(row=1, column=0, sticky=tk.NSEW, padx=12, pady=(0, 8))
@@ -61,10 +98,23 @@ class MainWindowShellView:
         self.status_frame.columnconfigure(0, weight=1)
         self.status_label = ttk.Label(
             self.status_frame,
-            text="Statusyta - loggning och operatörsstatus kommer senare.",
+            text=self._DEFAULT_STATUS_TEXT,
             anchor="w",
         )
         self.status_label.grid(row=0, column=0, sticky=tk.W)
+        self.root.protocol("WM_DELETE_WINDOW", self.handle_close_requested)
+
+    def set_status_message(self, message: str) -> None:
+        """Display a coarse shell-level status or lifecycle message."""
+        self.status_label.configure(text=message or self._DEFAULT_STATUS_TEXT)
+
+    def handle_reset_requested(self) -> None:
+        """Trigger the app-owned destructive reset callback when available."""
+        self._run_shell_action(self._reset_callback)
+
+    def handle_close_requested(self) -> None:
+        """Trigger the app-owned close callback when available."""
+        self._run_shell_action(self._close_callback)
 
     def _build_placeholder_tab(
         self,
@@ -91,6 +141,14 @@ class MainWindowShellView:
         self.notebook.add(tab_frame, text=tab_text)
         self.tab_hosts[key] = tab_frame
         self.placeholder_labels[key] = placeholder_label
+
+    def _run_shell_action(self, callback: ShellActionCallback | None) -> None:
+        if callback is None:
+            return
+
+        status_message = callback()
+        if status_message is not None:
+            self.set_status_message(status_message)
 
 
 __all__ = ["MainWindowShellView"]

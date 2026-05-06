@@ -179,6 +179,10 @@ def _scenario_render_state_for_unlock_using_remembered_target(root: tk.Tk) -> di
             "password_policy_hint_visible": bool(view.password_policy_hint_label.winfo_ismapped()),
             "key_file_manager": _field_row(view, StartupFieldName.KEY_FILE_PATH).winfo_manager(),
             "emergency_reset_manager": view.emergency_reset_button.winfo_manager(),
+            "emergency_reset_class": view.emergency_reset_button.winfo_class(),
+            "emergency_reset_background": view.emergency_reset_button.cget("background"),
+            "danger_action_frame_manager": view.danger_action_frame.winfo_manager(),
+            "button_separator_manager": view.button_separator.winfo_manager(),
         }
     finally:
         view.destroy()
@@ -521,6 +525,10 @@ def test_render_state_for_unlock_using_remembered_target_hides_manual_target_fie
     assert result["password_policy_hint_visible"] is False
     assert result["key_file_manager"] == ""
     assert result["emergency_reset_manager"] == "grid"
+    assert result["emergency_reset_class"] == "Button"
+    assert result["emergency_reset_background"] == "#c62828"
+    assert result["danger_action_frame_manager"] == "grid"
+    assert result["button_separator_manager"] == "grid"
 
 
 def test_render_state_for_manual_unlock_shows_database_target_fields(run_tk_scenario) -> None:

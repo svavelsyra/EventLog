@@ -235,10 +235,21 @@ class FakeMainWindowFactory:
     def __init__(self) -> None:
         self.received_root: object | None = None
         self.received_startup_result: StartupDialogSuccess | None = None
+        self.received_reset_callback: Callable[[], str | None] | None = None
+        self.received_close_callback: Callable[[], str | None] | None = None
 
-    def __call__(self, root, startup_result: StartupDialogSuccess) -> object:
+    def __call__(
+        self,
+        root,
+        startup_result: StartupDialogSuccess,
+        *,
+        reset_callback: Callable[[], str | None] | None = None,
+        close_callback: Callable[[], str | None] | None = None,
+    ) -> object:
         self.received_root = root
         self.received_startup_result = startup_result
+        self.received_reset_callback = reset_callback
+        self.received_close_callback = close_callback
         return object()
 
 
@@ -501,11 +512,17 @@ def test_app_shell_keeps_root_alive_after_successful_startup_until_main_window_r
         ),
         main_window_factory=cast(MainWindowFactory, cast(object, main_window_factory)),
     )
+    reset_callback = lambda: None
+    close_callback = lambda: None
 
     result = shell.run_startup_dialog(database_config)
     assert result is sentinel_result
 
-    shell.show_main_window(sentinel_result)
+    shell.show_main_window(
+        sentinel_result,
+        reset_callback=reset_callback,
+        close_callback=close_callback,
+    )
 
     assert captured == {
         "config": database_config,
@@ -518,6 +535,8 @@ def test_app_shell_keeps_root_alive_after_successful_startup_until_main_window_r
     assert runner.received_root is root
     assert main_window_factory.received_root is root
     assert main_window_factory.received_startup_result is sentinel_result
+    assert main_window_factory.received_reset_callback is reset_callback
+    assert main_window_factory.received_close_callback is close_callback
 
 
 def test_app_shell_destroys_root_after_cancelled_startup() -> None:
@@ -552,6 +571,92 @@ def test_app_shell_destroys_root_after_cancelled_startup() -> None:
     assert root.mainloop_called is False
     assert root.destroy_called is True
     assert runner.received_root is root
+
+
+def test_app_shell_closes_root_and_reraises_when_startup_runner_fails() -> None:
+    database_config = DatabaseConfig(
+        dialect="sqlite",
+        database_path="C:/Ops/eventlog.db",
+    )
+    root = FakeRoot()
+    captured: dict[str, object] = {}
+
+    class FailingStartupDialogRunner:
+        def run(self, *, root: TkRootProtocol) -> StartupDialogSuccess | None:
+            captured["received_root"] = root
+            raise RuntimeError("startup runner failed")
+
+    def _startup_controller_factory(
+        config: DatabaseConfig,
+        *,
+        emergency_reset_callback: EmergencyResetCallback | None = None,
+    ) -> FailingStartupDialogRunner:
+        captured["config"] = config
+        captured["emergency_reset_callback"] = emergency_reset_callback
+        return FailingStartupDialogRunner()
+
+    shell = AppShell(
+        root_factory=lambda: root,
+        startup_controller_factory=cast(
+            StartupControllerFactory,
+            cast(object, _startup_controller_factory),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="startup runner failed"):
+        shell.run_startup_dialog(database_config)
+
+    assert captured == {
+        "config": database_config,
+        "emergency_reset_callback": None,
+        "received_root": root,
+    }
+    assert root.withdraw_called is True
+    assert root.deiconify_called is False
+    assert root.mainloop_called is False
+    assert root.destroy_called is True
+
+
+def test_app_shell_closes_root_and_reraises_when_mainloop_fails() -> None:
+    database_config = DatabaseConfig(
+        dialect="sqlite",
+        database_path="C:/Ops/eventlog.db",
+    )
+    root = FakeRoot()
+    sentinel_result = app_module.StartupDialogSuccess(
+        repository=object(),
+        remembered_target=database_config.bootstrap_target,
+    )
+    runner = FakeStartupDialogRunner(sentinel_result)
+    main_window_factory = FakeMainWindowFactory()
+    root.on_mainloop = lambda: (_ for _ in ()).throw(RuntimeError("mainloop failed"))
+
+    shell = AppShell(
+        root_factory=lambda: root,
+        startup_controller_factory=cast(
+            StartupControllerFactory,
+            cast(object, lambda _config, *, emergency_reset_callback=None: runner),
+        ),
+        main_window_factory=cast(MainWindowFactory, cast(object, main_window_factory)),
+    )
+
+    startup_result = shell.run_startup_dialog(database_config)
+
+    assert startup_result is sentinel_result
+
+    with pytest.raises(RuntimeError, match="mainloop failed"):
+        shell.show_main_window(sentinel_result)
+
+    assert root.withdraw_called is True
+    assert root.deiconify_called is True
+    assert root.mainloop_called is True
+    assert root.destroy_called is True
+    assert runner.received_root is root
+    assert main_window_factory.received_root is root
+    assert main_window_factory.received_startup_result is sentinel_result
+
+    with pytest.raises(RuntimeError, match="App shell root is not available"):
+        shell.show_main_window(sentinel_result)
 
 
 def test_dialect_selection_reveals_backend_fields_after_initial_blank_state() -> None:
@@ -1392,6 +1497,30 @@ def test_run_active_context_reset_uses_startup_result_invalidator_before_cleanup
     )
 
 
+def test_run_active_context_close_uses_startup_result_invalidator_without_backend_cleanup() -> None:
+    phase_order: list[str] = []
+
+    startup_result = app_module.StartupDialogSuccess(
+        repository=object(),
+        remembered_target=DatabaseConfig(
+            dialect="sqlite",
+            database_path="C:/Ops/eventlog.db",
+        ).bootstrap_target,
+        invalidate_access=lambda: phase_order.append("deny"),
+        backend_cleanup=lambda: phase_order.append("cleanup"),
+    )
+
+    outcome = app_module.run_active_context_close(startup_result)
+
+    assert phase_order == ["deny"]
+    assert outcome == ResetOutcome(
+        had_active_context=True,
+        denial_succeeded=True,
+        cleanup_started=False,
+        cleanup_completed=False,
+    )
+
+
 def test_run_active_context_reset_returns_safe_outcome_without_active_startup_result() -> None:
     cleanup_called = False
 
@@ -2015,8 +2144,14 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
     )
     captured: dict[str, object] = {}
     persisted: dict[str, object] = {}
+    shell_close_calls: list[str] = []
+    reset_calls: list[tuple[StartupDialogSuccess, object]] = []
+    close_calls: list[StartupDialogSuccess] = []
 
     class FakeAppShell:
+        def __init__(self) -> None:
+            captured["shell"] = self
+
         def run_startup_dialog(
             self,
             config: DatabaseConfig,
@@ -2028,12 +2163,20 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
             captured["run_called"] = True
             return sentinel_result
 
-        def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+        def show_main_window(
+            self,
+            startup_result: StartupDialogSuccess,
+            *,
+            reset_callback=None,
+            close_callback=None,
+        ) -> None:
             captured["show_main_window_called"] = True
             captured["main_window_startup_result"] = startup_result
+            captured["reset_callback"] = reset_callback
+            captured["close_callback"] = close_callback
 
         def close(self) -> None:
-            captured["close_called"] = True
+            shell_close_calls.append("close")
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
     monkeypatch.setattr(
@@ -2042,6 +2185,31 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
         lambda loaded_config, *, config_path: runtime_database_config,
     )
     monkeypatch.setattr(app_module, "AppShell", FakeAppShell)
+    monkeypatch.setattr(
+        app_module,
+        "run_active_context_reset",
+        lambda startup_result, *, config_path=None: reset_calls.append((startup_result, config_path))
+        or app_module.ActiveContextResetResult(
+            success=True,
+            shared_outcome=ResetOutcome(
+                had_active_context=True,
+                denial_succeeded=True,
+                cleanup_started=True,
+                cleanup_completed=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "run_active_context_close",
+        lambda startup_result: close_calls.append(startup_result)
+        or ResetOutcome(
+            had_active_context=True,
+            denial_succeeded=True,
+            cleanup_started=False,
+            cleanup_completed=False,
+        ),
+    )
     monkeypatch.setattr(
         app_module,
         "save_bootstrap_target_config",
@@ -2054,19 +2222,31 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
     )
 
     result = app_module.run_app()
+    reset_callback = cast(Callable[[], str | None], captured["reset_callback"])
+    close_callback = cast(Callable[[], str | None], captured["close_callback"])
 
     assert captured == {
+        "shell": captured["shell"],
         "config": runtime_database_config,
         "emergency_reset_callback": captured["emergency_reset_callback"],
         "run_called": True,
         "show_main_window_called": True,
         "main_window_startup_result": sentinel_result,
+        "reset_callback": captured["reset_callback"],
+        "close_callback": captured["close_callback"],
     }
     assert callable(captured["emergency_reset_callback"])
+    assert callable(reset_callback)
+    assert callable(close_callback)
     assert persisted == {
         "config_path": app_module.DEFAULT_CONFIG_PATH,
         "target": runtime_database_config.bootstrap_target,
     }
+    assert reset_callback() is None
+    assert close_callback() is None
+    assert reset_calls == [(sentinel_result, app_module.DEFAULT_CONFIG_PATH)]
+    assert close_calls == [sentinel_result]
+    assert shell_close_calls == ["close", "close"]
     assert result is sentinel_result
 
 
@@ -2092,7 +2272,13 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
             assert callable(emergency_reset_callback)
             return None
 
-        def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+        def show_main_window(
+            self,
+            startup_result: StartupDialogSuccess,
+            *,
+            reset_callback=None,
+            close_callback=None,
+        ) -> None:
             raise AssertionError(f"show_main_window should not be called: {startup_result!r}")
 
         def close(self) -> None:
@@ -2117,6 +2303,79 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
     assert persisted == []
 
 
+def test_run_app_closes_shell_and_reraises_when_persisting_remembered_target_fails(monkeypatch) -> None:
+    database_config = DatabaseConfig(
+        dialect="sqlite",
+        database_path="eventlog.db",
+    )
+    runtime_database_config = DatabaseConfig(
+        dialect="sqlite",
+        database_path="C:/Ops/eventlog.db",
+    )
+    sentinel_result = app_module.StartupDialogSuccess(
+        repository=object(),
+        remembered_target=runtime_database_config.bootstrap_target,
+    )
+    captured: dict[str, object] = {}
+    shell_close_calls: list[str] = []
+
+    class FakeAppShell:
+        def __init__(self) -> None:
+            captured["shell"] = self
+
+        def run_startup_dialog(
+            self,
+            config: DatabaseConfig,
+            *,
+            emergency_reset_callback=None,
+        ):
+            captured["config"] = config
+            captured["emergency_reset_callback"] = emergency_reset_callback
+            captured["run_called"] = True
+            return sentinel_result
+
+        def show_main_window(
+            self,
+            startup_result: StartupDialogSuccess,
+            *,
+            reset_callback=None,
+            close_callback=None,
+        ) -> None:
+            raise AssertionError(f"show_main_window should not be called: {startup_result!r}")
+
+        def close(self) -> None:
+            shell_close_calls.append("close")
+
+    monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_runtime_database_config",
+        lambda loaded_config, *, config_path: runtime_database_config,
+    )
+    monkeypatch.setattr(app_module, "AppShell", FakeAppShell)
+
+    def _failing_save(config_path, target) -> None:
+        captured["persist_config_path"] = config_path
+        captured["persist_target"] = target
+        raise OSError("locked")
+
+    monkeypatch.setattr(app_module, "save_bootstrap_target_config", _failing_save)
+
+    with pytest.raises(OSError, match="locked"):
+        app_module.run_app()
+
+    assert captured == {
+        "shell": captured["shell"],
+        "config": runtime_database_config,
+        "emergency_reset_callback": captured["emergency_reset_callback"],
+        "run_called": True,
+        "persist_config_path": app_module.DEFAULT_CONFIG_PATH,
+        "persist_target": runtime_database_config.bootstrap_target,
+    }
+    assert callable(captured["emergency_reset_callback"])
+    assert shell_close_calls == ["close"]
+
+
 def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(monkeypatch) -> None:
     database_config = DatabaseConfig(
         dialect="sqlite",
@@ -2137,7 +2396,13 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
             captured["run_called"] = True
             return None
 
-        def show_main_window(self, startup_result: StartupDialogSuccess) -> None:
+        def show_main_window(
+            self,
+            startup_result: StartupDialogSuccess,
+            *,
+            reset_callback=None,
+            close_callback=None,
+        ) -> None:
             raise AssertionError(f"show_main_window should not be called: {startup_result!r}")
 
         def close(self) -> None:

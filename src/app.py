@@ -44,6 +44,11 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
 ResetCleanup = Callable[[], None]
 
 ResetFollowUpHint = ResetFollowUpIssue
+MainWindowLifecycleCallback = Callable[[], str | None]
+
+_MAIN_WINDOW_RESET_FAILURE_MESSAGE = "MISSLYCKADES"
+_MAIN_WINDOW_MANUAL_FOLLOW_UP_MESSAGE = "Följ upp manuellt."
+_MAIN_WINDOW_KEY_FILE_ADVISORY = "Eventuella nyckelfiler behöver tas bort manuellt."
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -236,6 +241,61 @@ def _build_startup_emergency_reset_callback(
     return startup_reset_callback
 
 
+def _build_main_window_reset_failure_message(result: ActiveContextResetResult) -> str:
+    """Return a coarse shell-level reset failure message."""
+    message_lines = [_MAIN_WINDOW_RESET_FAILURE_MESSAGE]
+    if result.follow_up_hints:
+        message_lines.append(_MAIN_WINDOW_MANUAL_FOLLOW_UP_MESSAGE)
+    if result.manual_key_file_cleanup_advisory:
+        message_lines.append(_MAIN_WINDOW_KEY_FILE_ADVISORY)
+
+    return "\n".join(message_lines)
+
+
+def run_active_context_close(startup_result: StartupDialogSuccess | None) -> ResetOutcome:
+    """Release the active context for normal shell shutdown without destructive cleanup."""
+    return ResetCoordinator(
+        deny_access=_resolve_reset_denial_step(startup_result),
+        cleanup=None,
+    ).run()
+
+
+def _build_main_window_reset_callback(
+    shell: AppShell,
+    startup_result: StartupDialogSuccess,
+    *,
+    config_path: str | PathLike[str],
+) -> MainWindowLifecycleCallback:
+    """Return the visible-shell destructive reset callback for the active context."""
+
+    def reset_callback() -> str | None:
+        result = run_active_context_reset(startup_result, config_path=config_path)
+        if result.success:
+            shell.close()
+            return None
+
+        return _build_main_window_reset_failure_message(result)
+
+    return reset_callback
+
+
+def _build_main_window_close_callback(
+    shell: AppShell,
+    startup_result: StartupDialogSuccess,
+) -> MainWindowLifecycleCallback:
+    """Return the visible-shell close callback for the active context."""
+
+    def close_callback() -> str | None:
+        outcome = run_active_context_close(startup_result)
+        if not outcome.failure_categories:
+            shell.close()
+            return None
+
+        return _MAIN_WINDOW_RESET_FAILURE_MESSAGE
+
+    return close_callback
+
+
 
 def run_active_context_reset(
     startup_result: StartupDialogSuccess | None,
@@ -322,7 +382,18 @@ def run_app(config_path: str | PathLike[str] | None = None) -> StartupDialogSucc
         except Exception:
             shell.close()
             raise
-        shell.show_main_window(startup_result)
+        shell.show_main_window(
+            startup_result,
+            reset_callback=_build_main_window_reset_callback(
+                shell,
+                startup_result,
+                config_path=resolved_config_path,
+            ),
+            close_callback=_build_main_window_close_callback(
+                shell,
+                startup_result,
+            ),
+        )
 
     return startup_result
 

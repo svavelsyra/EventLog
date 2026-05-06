@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Callable, Sequence
 
@@ -178,22 +179,45 @@ class StartupDialogView:
         self.status_label.grid(row=4, column=0, sticky=tk.W, pady=(0, 8))
         self.status_label.grid_remove()
 
+        self.button_separator = ttk.Separator(self.container, orient="horizontal")
+        self.button_separator.grid(row=5, column=0, sticky=tk.EW, pady=(4, 10))
+
         self.button_row = ttk.Frame(self.container)
-        self.button_row.grid(row=5, column=0, sticky=tk.EW)
+        self.button_row.grid(row=6, column=0, sticky=tk.EW)
         self.button_row.columnconfigure(1, weight=1)
-        self.emergency_reset_button = ttk.Button(
-            self.button_row,
+        self.danger_action_frame = ttk.Frame(self.button_row, padding=(0, 2, 0, 0))
+        self.danger_action_frame.grid(row=0, column=0, sticky=tk.W)
+        self.primary_action_frame = ttk.Frame(self.button_row)
+        self.primary_action_frame.grid(row=0, column=2, sticky=tk.E)
+        reset_button_font = tkfont.nametofont("TkDefaultFont").copy()
+        reset_button_font.configure(weight="bold")
+        self._emergency_reset_button_font = reset_button_font
+        self.emergency_reset_button = tk.Button(
+            self.danger_action_frame,
             text="Nollställ",
             command=self._handle_emergency_reset,
+            font=self._emergency_reset_button_font,
+            background="#c62828",
+            foreground="#ffffff",
+            activebackground="#8e0000",
+            activeforeground="#ffffff",
+            highlightbackground="#c62828",
+            highlightcolor="#8e0000",
+            highlightthickness=1,
+            borderwidth=2,
+            relief="raised",
+            cursor="hand2",
+            padx=10,
+            pady=5,
         )
         self.emergency_reset_button.grid(row=0, column=0, sticky=tk.W)
-        self.cancel_button = ttk.Button(self.button_row, text="Avbryt", command=self._handle_cancel)
-        self.migrate_button = ttk.Button(self.button_row, text="Migrera", command=self._handle_migrate)
-        self.migrate_button.grid(row=0, column=2, sticky=tk.E, padx=(8, 8))
+        self.cancel_button = ttk.Button(self.primary_action_frame, text="Avbryt", command=self._handle_cancel)
+        self.migrate_button = ttk.Button(self.primary_action_frame, text="Migrera", command=self._handle_migrate)
+        self.migrate_button.grid(row=0, column=0, sticky=tk.E, padx=(0, 8))
         self.migrate_button.grid_remove()
-        self.cancel_button.grid(row=0, column=3, sticky=tk.E, padx=(8, 8))
-        self.submit_button = ttk.Button(self.button_row, text="OK", command=self._handle_submit)
-        self.submit_button.grid(row=0, column=4, sticky=tk.E)
+        self.cancel_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 8))
+        self.submit_button = ttk.Button(self.primary_action_frame, text="OK", command=self._handle_submit)
+        self.submit_button.grid(row=0, column=2, sticky=tk.E)
 
         self.window.protocol("WM_DELETE_WINDOW", self.handle_close_requested)
         self.window.update_idletasks()
