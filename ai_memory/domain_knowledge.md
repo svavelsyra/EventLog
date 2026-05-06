@@ -90,11 +90,16 @@
 - **RA180 practical use clarification**:
   - In normal use, the operator typically sets an RA180 **mode** to either `clear` or `encrypted`.
   - The operator also selects a **channel** for send/receive.
+  - The practical base channel set is **1-8**.
+  - Those numbered channels may also carry free-text practical names/designations in use, and the application should preserve the name/designation that was actually logged.
   - A data sender such as **DART** may then be attached and the same configured radio is often used for both voice and data.
   - The most common practical setup is one selected channel, mode set to `encrypted`, DART connected, and the radio used for both voice and data.
   - Channel-specific data/voice restrictions can exist operationally (for example data only on one channel, data+voice on another, voice only on a third), but the app does **not** need to enforce those restrictions in Phase 1; they are important as domain context, not as a required hard validation rule.
   - When crypto data is attached to RA180, operators may still switch between `clear` and `encrypted` for speech use, while data use is effectively encrypted-only in practice.
   - For Phase 1 UX, a simple boolean-like `Data` flag may be acceptable if unchecked means ordinary speech/voice, but this remains a design choice rather than a finalized rule.
+ - **Motorola practical channel note**:
+   - Motorola should also be modeled with a practical base channel set of **1-8**.
+   - Free-text naming/designation is less common than on RA180, but the model should still allow a channel to have a human-readable label when that is useful.
 
 **Historical accuracy requirement**: Logs must preserve channel designations as they were at time of logging, because designations can change during operations.
 

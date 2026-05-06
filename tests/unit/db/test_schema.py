@@ -20,6 +20,9 @@ SCHEMA_FILE = (
 
 EXPECTED_TABLES = {
     "communication_entries",
+    "communication_options",
+    "communication_qualifiers_config",
+    "communication_systems",
     "event_entries",
     "personnel_entries",
     "settings",
@@ -29,7 +32,13 @@ EXPECTED_INDEXES = {
     "idx_comm_event_time",
     "idx_comm_logged_time",
     "idx_comm_operator",
+    "idx_comm_option_active",
+    "idx_comm_option_parent",
+    "idx_comm_option_system",
+    "idx_comm_qualifiers_system",
     "idx_comm_system",
+    "idx_comm_systems_active",
+    "idx_comm_systems_type",
     "idx_comm_method_type",
     "idx_event_event_time",
     "idx_event_logged_time",
@@ -41,6 +50,8 @@ EXPECTED_INDEXES = {
     "idx_personnel_logged_time",
     "idx_personnel_last_contact",
     "idx_personnel_alarm",
+    "uq_comm_option_unique_path",
+    "uq_comm_qualifiers_system_key",
 }
 
 
@@ -71,6 +82,12 @@ def _get_schema_object_names(connection: sqlite3.Connection, object_type: str) -
     return {row[0] for row in rows}
 
 
+def _get_table_row_count(connection: sqlite3.Connection, table_name: str) -> int:
+    row = connection.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 def test_execute_schema_file_creates_expected_tables_and_indexes(
     connection: sqlite3.Connection,
 ) -> None:
@@ -86,6 +103,10 @@ def test_execute_schema_file_is_idempotent(connection: sqlite3.Connection) -> No
 
     assert _get_schema_object_names(connection, "table") == EXPECTED_TABLES
     assert _get_schema_object_names(connection, "index") == EXPECTED_INDEXES
+    assert _get_table_row_count(connection, "settings") == 1
+    assert _get_table_row_count(connection, "communication_systems") == 4
+    assert _get_table_row_count(connection, "communication_options") == 18
+    assert _get_table_row_count(connection, "communication_qualifiers_config") == 5
 
 
 def test_schema_applies_default_values(initialized_connection: sqlite3.Connection) -> None:
@@ -129,6 +150,84 @@ def test_schema_applies_default_values(initialized_connection: sqlite3.Connectio
     assert event_row == ("Normal", 0)
     assert personnel_row == (0, 1, 0, 0)
     assert settings_row == ("300",)
+
+
+def test_schema_seeds_operational_configuration_defaults(
+    initialized_connection: sqlite3.Connection,
+) -> None:
+    system_rows = initialized_connection.execute(
+        """
+        SELECT system_name, system_type, child_label, sort_order, is_active
+        FROM communication_systems
+        ORDER BY sort_order, system_name
+        """
+    ).fetchall()
+    option_rows = initialized_connection.execute(
+        """
+        SELECT cs.system_name, co.option_value, co.option_label, co.sort_order, co.is_active
+        FROM communication_options AS co
+        JOIN communication_systems AS cs
+            ON cs.id = co.communication_system_id
+        ORDER BY cs.sort_order, co.sort_order, co.option_value
+        """
+    ).fetchall()
+    qualifier_rows = initialized_connection.execute(
+        """
+        SELECT cs.system_name, cqc.qualifier_key, cqc.label, cqc.field_type, cqc.default_value, cqc.visibility_mode
+        FROM communication_qualifiers_config AS cqc
+        JOIN communication_systems AS cs
+            ON cs.id = cqc.communication_system_id
+        ORDER BY cs.sort_order, cqc.qualifier_key
+        """
+    ).fetchall()
+
+    assert system_rows == [
+        ("RA180", "Radio System", "Channel", 10, 1),
+        ("Motorola", "Radio System", "Channel", 20, 1),
+        ("Rakel", "Radio System", "Channel", 30, 1),
+        ("Courier", "Courier", None, 40, 1),
+    ]
+    assert option_rows == [
+        ("RA180", "1", "Channel 1", 10, 1),
+        ("RA180", "2", "Channel 2", 20, 1),
+        ("RA180", "3", "Channel 3", 30, 1),
+        ("RA180", "4", "Channel 4", 40, 1),
+        ("RA180", "5", "Channel 5", 50, 1),
+        ("RA180", "6", "Channel 6", 60, 1),
+        ("RA180", "7", "Channel 7", 70, 1),
+        ("RA180", "8", "Channel 8", 80, 1),
+        ("Motorola", "1", "Channel 1", 10, 1),
+        ("Motorola", "2", "Channel 2", 20, 1),
+        ("Motorola", "3", "Channel 3", 30, 1),
+        ("Motorola", "4", "Channel 4", 40, 1),
+        ("Motorola", "5", "Channel 5", 50, 1),
+        ("Motorola", "6", "Channel 6", 60, 1),
+        ("Motorola", "7", "Channel 7", 70, 1),
+        ("Motorola", "8", "Channel 8", 80, 1),
+        ("Rakel", "X", "Talkgroup X", 10, 1),
+        ("Rakel", "Y", "Talkgroup Y", 20, 1),
+    ]
+    assert qualifier_rows == [
+        ("RA180", "data", "Data", "boolean", "false", "editable"),
+        ("RA180", "encrypted", "Krypterad", "boolean", "false", "editable"),
+        ("Motorola", "encrypted", "Krypterad", "boolean", "false", "forced"),
+        ("Rakel", "encrypted", "Krypterad", "boolean", "true", "forced"),
+        ("Courier", "encrypted", "Krypterad", "boolean", "false", "hidden"),
+    ]
+
+
+def test_communication_entries_do_not_depend_on_live_config_foreign_keys(
+    initialized_connection: sqlite3.Connection,
+) -> None:
+    foreign_key_rows = initialized_connection.execute(
+        "PRAGMA foreign_key_list('communication_entries')"
+    ).fetchall()
+
+    assert {row[2] for row in foreign_key_rows} & {
+        "communication_systems",
+        "communication_options",
+        "communication_qualifiers_config",
+    } == set()
 
 
 @pytest.mark.parametrize(

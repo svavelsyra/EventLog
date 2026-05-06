@@ -62,6 +62,12 @@ The application follows a strict layered architecture with clear separation of c
 - One concrete repository is enough for now, but it should be easy to split by area later if growth or test scope requires it
 - Repository business rules may read low-level configuration from the database `settings` table (for example the edited-flag grace period stored in seconds)
 
+**Planned long-term direction**:
+- The preferred long-term split is one repository for communications, one for events, and one for personnel because those are the main operational areas and the main GUI workflow areas.
+- If `EventLogRepository` remains after that split, it should become a deliberately small shared/configuration repository or thin facade rather than staying a fourth large catch-all CRUD surface.
+- Shared/configuration ownership may include communication configuration, repository `settings`, and other cross-cutting operational metadata that does not belong cleanly to only one of the three main workflow repositories.
+- Startup/bootstrap backend-policy ownership remains outside that shared/configuration role and stays with `src/db/repositories/bootstrap_backend_policy.py`.
+
 #### Factory Pattern
 - `src/db/repositories/bootstrap_backend_policy.py` is the centralized startup/bootstrap backend-policy seam
 - It owns supported-dialect facts, startup field requirements, remembered-target normalization/persistence behavior, coarse startup capability facts, and per-dialect repository creation dispatch
@@ -88,6 +94,16 @@ The application follows a strict layered architecture with clear separation of c
 - `SQLiteAdapter` owns connection lifecycle, schema initialization, SQL execution primitives, and transaction primitives
 - `EventLogRepository` owns CRUD workflows, query behavior, row mapping, and repository-level business rules
 - Remaining transition work is primarily about startup/version policy refinement and future repository splitting, not legacy repository compatibility
+
+## Planned Repository Boundary Direction
+- **Current implementation**: one concrete SQLite repository (`EventLogRepository`) still owns the application's CRUD/query behavior.
+- **Preferred future split**:
+  - `CommunicationRepository` - communication entries plus communication-specific configuration reads/writes
+  - `EventRepository` - event entries and closely related event-owned persistence behavior
+  - `PersonnelRepository` - personnel history, active-state, and alarm workflows
+  - `EventLogRepository` only if kept as a thin shared/configuration seam or facade
+- The shared/configuration role should stay intentionally narrow and must not become a second monolithic repository after the split.
+- If that shared role grows beyond a small cross-cutting seam, it should be renamed more explicitly (for example toward a configuration-focused repository name) rather than leaving a misleading broad `EventLogRepository` name in place.
 
 ## Startup and Bootstrap Contract
 

@@ -6,7 +6,7 @@
 
 ## PRIORITIES (When Rules Conflict)
 
-1. **SAFETY** - No git, read before edit, verify after
+1. **SAFETY** - Read before edit, verify after, use Git carefully when helpful
 2. **USER TIME** - Every file changed = user must review = expensive
 3. **SMALL PATCHES** - Prefer one coherent decision per change; small-to-medium multi-file edits are acceptable when they apply the same structural fix across direct dependents
 4. **DISCUSS FIRST** - User prefers conversation over action
@@ -99,8 +99,16 @@ not as forbidden scope creep.
 
 - **Read file before editing** - Never edit blind
 - **Validate with get_errors after editing** - Catch problems immediately
-- **No git exists** - Mistakes are permanent, can't rollback
+- **Git is available** - Git commands may be used when helpful, but still treat validation and careful review as mandatory
 - **Think, then act** - Pause and consider before making changes
+
+### Test command approval friction
+
+- Prefer the smallest stable family of approved test commands over many optimized variants.
+- Default test command: `python -m pytest`
+- Allowed focused command shape: `python -m pytest .\tests\<relative-path-to-single-test-file>.py`
+- Do **not** invent extra pytest flags, multi-file command combinations, reordered file lists, node selectors, or `-k` filters unless the user explicitly asks.
+- When running tests, reuse the exact approved command shapes and consult `ai_instructions/testing.md` for the detailed policy.
 
 ---
 
@@ -245,6 +253,7 @@ files require different design decisions.
 - Interpret "yes" as blanket permission for remaining files
 - Use checklist format in session logs (triggers batch behavior)
 - Add temporary compatibility shims purely to satisfy an artificial one-file boundary when the cleaner structural fix is to update direct dependents in the same change
+- Mark a user story as `Done`, move a story between `user_stories/ToDo/` and `user_stories/Done/`, or check off parent-epic story boxes unless the user explicitly asks for that story-state change
 
 **Example CORRECT behavior:**
 ```
@@ -305,5 +314,5 @@ AI: [Starts file2.md without waiting] ← WRONG! Violated protocol
 
 ---
 
-**Last Updated**: 2026-04-25 (Session 015 - Added checklist warning and multi-file protocol, removed emoji usage)
+**Last Updated**: 2026-05-06 (Session 089 - Removed stale no-Git assumption after user confirmed Git is available)
 

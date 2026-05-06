@@ -106,8 +106,8 @@ Stores radio messages, phone calls, written orders, and other communications.
 **Communication Selection Snapshot Fields**:
 - `communication_system` TEXT NULL - Selected top-level communication way/system snapshot (e.g., "RA180", "Motorola", "Courier")
 - `communication_path` TEXT NULL - JSON array describing the selected recursive option path beneath the top-level system
-  - Example: `[ {"value": "5", "label": "Company Net"} ]`
-  - Deeper future example: `[ {"value": "5", "label": "Company Net"}, {"value": "DATA", "label": "Data Route"} ]`
+  - Example: `[ {"value": "3", "label": "Channel 3"} ]`
+  - Deeper future example: `[ {"value": "3", "label": "Platoon Net"}, {"value": "DATA", "label": "Data Route"} ]`
 - `communication_qualifiers` TEXT NULL - JSON dict with chosen top-level qualifier values (e.g., `{"encrypted": true, "data": true}`)
 
 **Recursive structure note**:
@@ -266,16 +266,16 @@ This is the actual data behind the current tiered UI. The first option level und
 **Fields**:
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT - Unique identifier
 - `communication_system_id` INTEGER NOT NULL - Foreign key to communication_systems.id
-- `option_value` TEXT NOT NULL - Stable stored value / technical identifier (e.g., "5", "A", "DATA")
-- `option_label` TEXT NOT NULL - Human-readable label shown to the operator (e.g., "Company Net", "Channel A")
+- `option_value` TEXT NOT NULL - Stable stored value / technical identifier (e.g., "3", "8", "DATA")
+- `option_label` TEXT NOT NULL - Human-readable label shown to the operator (e.g., "Channel 3", "Platoon Net")
 - `parent_option_id` INTEGER NULL - Optional parent option row when this option belongs beneath another option
 - `child_label` TEXT NULL - Label to show for the next visible level beneath this option, if children exist
 - `sort_order` INTEGER NULL - Display order in UI
 - `is_active` INTEGER NOT NULL DEFAULT 1 - Soft delete flag (0=inactive, 1=active)
 
 **Default data** (Phase 1 - for your unit):
-- **RA180 root children**: Company Net (Ch 5), Platoon 1 Net (Ch 7), Platoon 2 Net (Ch 9)
-- **Motorola root children**: locally meaningful channel selections for close-range group/platoon communication
+- **RA180 root children**: channels `1`-`8`, seeded initially as `Channel 1` ... `Channel 8` while still allowing practical free-text labels/designations later
+- **Motorola root children**: channels `1`-`8`, seeded initially as `Channel 1` ... `Channel 8`; custom names are less common but still allowed by the model
 - **Rakel root children**: selected operational channel set for the simplified first-pass radio use
 - **Courier**: no child option rows by default in Phase 1
 - Deeper child rows may remain empty in Phase 1 for many systems even though the recursive storage supports them

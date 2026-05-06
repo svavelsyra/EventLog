@@ -111,6 +111,18 @@ All fields from the MessageLogEntry entity, with:
 - Plaintext filesystem attachment directories are not part of the approved secure design.
 - Future support for large attachments is optional future work and, if ever approved, must use separately encrypted external storage rather than normal readable files.
 
+### Communication Configuration Portability Recovery Flow
+- Epic `003` communication portability is a narrow recovery aid for approved communication runtime configuration only.
+- The intended recovery sequence is:
+  1. export the approved communication-config bundle before reset/recreation,
+  2. perform the reset or create/open the replacement database,
+  3. restore the saved bundle through the portability import path,
+  4. reload runtime communication configuration before normal logging resumes.
+- The approved bundle scope is limited to communication systems, recursive communication options, and communication qualifier definitions.
+- Secrets, bootstrap/security material, user preferences, event metadata, structured-report templates, and historical entry/log data are explicitly outside this portability flow.
+- Restore must validate the whole versioned bundle contract before any database apply work begins; unsupported bundle kinds/versions or unexpected sections must be rejected.
+- Applying a valid recovery bundle should exact-replace the active communication runtime configuration so the post-restore runtime view matches the bundle without stale active systems/options left behind.
+
 ### Persistence Layer Design
 
 #### Database Adapter Interface

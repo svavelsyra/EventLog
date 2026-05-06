@@ -7,15 +7,111 @@ Core entry models used by the SQLite repository and later CRUD stories.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TypeAlias
 
-from src.core import CommunicationEntry, EventEntry, PersonnelEntry
+from src.core import (
+    CommunicationEntry,
+    CommunicationOptionMutationResult,
+    CommunicationPortabilityBundle,
+    EventEntry,
+    PersonnelEntry,
+)
 
 EntryFilters: TypeAlias = dict[str, object]
+QualifierDefaultValue: TypeAlias = bool | str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationOptionConfig:
+    """Caller-facing recursive communication option shape."""
+
+    option_id: int
+    option_value: str
+    option_label: str
+    child_label: str | None
+    sort_order: int | None
+    children: tuple[CommunicationOptionConfig, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationQualifierConfig:
+    """Caller-facing qualifier definition for one communication system."""
+
+    qualifier_key: str
+    label: str
+    field_type: str
+    valid_values: tuple[str, ...] | None
+    default_value: QualifierDefaultValue
+    help_text: str | None
+    visibility_mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSystemConfig:
+    """Caller-facing assembled communication system configuration."""
+
+    system_id: int
+    system_name: str
+    system_type: str
+    child_label: str | None
+    sort_order: int | None
+    options: tuple[CommunicationOptionConfig, ...] = ()
+    qualifiers: tuple[CommunicationQualifierConfig, ...] = ()
 
 
 class EventLogAdapter(ABC):
     """Abstract interface for EventLog database operations."""
+
+    # ========== Communication Configuration Reads ==========
+
+    @abstractmethod
+    def get_active_communication_system_configs(self) -> list[CommunicationSystemConfig]:
+        """Return assembled active communication-system configuration for runtime use."""
+
+    @abstractmethod
+    def get_active_communication_system_config(
+        self,
+        system_name: str,
+    ) -> CommunicationSystemConfig | None:
+        """Return one active communication-system configuration by name."""
+
+    @abstractmethod
+    def add_communication_option(
+        self,
+        *,
+        system_name: str,
+        option_value: str,
+        option_label: str,
+        parent_option_id: int | None = None,
+        child_label: str | None = None,
+        sort_order: int | None = None,
+    ) -> CommunicationOptionMutationResult:
+        """Create or reactivate one communication option beneath a chosen parent."""
+
+    @abstractmethod
+    def rename_communication_option(
+        self,
+        *,
+        option_id: int,
+        option_label: str,
+    ) -> CommunicationOptionMutationResult:
+        """Rename one communication option row without rewriting historical entries."""
+
+    @abstractmethod
+    def deactivate_communication_option(
+        self,
+        *,
+        option_id: int,
+    ) -> CommunicationOptionMutationResult:
+        """Soft-deactivate one communication option subtree for future use only."""
+
+    @abstractmethod
+    def replace_communication_portability_bundle(
+        self,
+        bundle: CommunicationPortabilityBundle,
+    ) -> None:
+        """Replace active communication configuration exactly to match one bundle."""
 
     # ========== CommunicationEntry Operations ==========
 

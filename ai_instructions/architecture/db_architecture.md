@@ -166,6 +166,13 @@ Repositories provide the application-facing persistence API.
 
 **Design Note**: For now, one public repository is enough. It should still be structured so communication, event, and personnel logic can be split into smaller repository files later if growth or test scope demands it.
 
+**Planned Repository Boundary Direction**:
+- The long-term preferred split is by the application's main operational areas: `CommunicationRepository`, `EventRepository`, and `PersonnelRepository`.
+- If `EventLogRepository` remains after that split, it should become a deliberately small shared/configuration seam rather than a second catch-all CRUD repository.
+- That shared/configuration seam may own cross-cutting runtime metadata such as communication configuration reads, low-level repository `settings`, and similarly shared operational metadata that does not belong cleanly to one main tab/workflow area.
+- Startup/bootstrap backend policy does **not** move into that shared/configuration seam; `bootstrap_backend_policy.py` remains the ownership boundary for startup/backend-policy facts and repository-construction dispatch.
+- Future refactors should avoid ending up with both three domain repositories **and** a still-large `EventLogRepository`; either the shared repository stays thin or it should be renamed to match its narrowed role.
+
 ### Dialect-Specific Repository Packages
 Concrete repositories live in dialect-specific subpackages.
 
@@ -181,10 +188,11 @@ Concrete repositories live in dialect-specific subpackages.
 - The earlier legacy top-level SQLite repository compatibility file has been removed
 
 **Expected SQLite package shape**:
-- `event_log_repository.py` - Single concrete repository returned publicly for now
+- `event_log_repository.py` - Single concrete repository returned publicly for now; if retained later, it should narrow toward shared/configuration concerns or a thin facade role
 - `communication_repository.py` - Extracted communication persistence logic when needed
 - `event_repository.py` - Extracted event persistence logic when needed
 - `personnel_repository.py` - Extracted personnel persistence logic when needed
+- `configuration_repository.py` - Optional future home for shared runtime metadata/configuration if that role becomes large enough to deserve a clearer name than `EventLogRepository`
 
 ## Target Package Layout
 
@@ -200,7 +208,8 @@ src/db/
 │       ├── event_log_repository.py
 │       ├── communication_repository.py
 │       ├── event_repository.py
-│       └── personnel_repository.py
+│       ├── personnel_repository.py
+│       └── configuration_repository.py
 └── schema/
     ├── schema_executor.py
     └── sqlite/

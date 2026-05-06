@@ -17,6 +17,9 @@ pytestmark = pytest.mark.unit
 
 EXPECTED_TABLES = {
     "communication_entries",
+    "communication_options",
+    "communication_qualifiers_config",
+    "communication_systems",
     "event_entries",
     "personnel_entries",
     "settings",

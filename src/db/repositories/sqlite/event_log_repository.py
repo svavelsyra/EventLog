@@ -16,6 +16,10 @@ from typing import Callable, cast
 
 from src.db.adapters.event_log_adapter import (
     CommunicationEntry,
+    CommunicationOptionConfig,
+    CommunicationOptionMutationResult,
+    CommunicationQualifierConfig,
+    CommunicationSystemConfig,
     EntryFilters,
     EventEntry,
     EventLogAdapter,
@@ -23,6 +27,12 @@ from src.db.adapters.event_log_adapter import (
 )
 from src.db.repositories.base_repository import BaseRepository
 from src.db.sqlite_adapter import SQLiteAdapter
+from src.core.communication_portability import (
+    CommunicationPortabilityBundle,
+    PortableCommunicationOption,
+    PortableCommunicationQualifier,
+    PortableCommunicationSystem,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -95,6 +105,255 @@ class EventLogRepository(EventLogAdapter, BaseRepository):
         """Commit writes that are not part of an explicit transaction."""
         if not self.adapter._explicit_transaction_active:
             self.commit()
+
+    def get_active_communication_system_configs(self) -> list[CommunicationSystemConfig]:
+        """Return all active communication systems with assembled options and qualifiers."""
+        system_rows = self.adapter.fetch(
+            """
+            SELECT id, system_name, system_type, child_label, sort_order
+            FROM communication_systems
+            WHERE is_active = 1
+            ORDER BY sort_order IS NULL, sort_order, system_name, id
+            """
+        )
+        if not system_rows:
+            return []
+
+        options_by_system = self._get_active_communication_options_by_system()
+        qualifiers_by_system = self._get_active_communication_qualifiers_by_system()
+
+        return [
+            self._row_to_communication_system_config(
+                row,
+                options_by_system.get(int(row["id"]), ()),
+                qualifiers_by_system.get(int(row["id"]), ()),
+            )
+            for row in system_rows
+        ]
+
+    def get_active_communication_system_config(
+        self,
+        system_name: str,
+    ) -> CommunicationSystemConfig | None:
+        """Return one active communication system config by name, or ``None``."""
+        for system_config in self.get_active_communication_system_configs():
+            if system_config.system_name == system_name:
+                return system_config
+        return None
+
+    def add_communication_option(
+        self,
+        *,
+        system_name: str,
+        option_value: str,
+        option_label: str,
+        parent_option_id: int | None = None,
+        child_label: str | None = None,
+        sort_order: int | None = None,
+    ) -> CommunicationOptionMutationResult:
+        """Create or reactivate one communication option beneath a chosen parent."""
+        normalized_value = self._normalize_required_config_text(option_value, "option_value")
+        normalized_label = self._normalize_required_config_text(option_label, "option_label")
+
+        system_row = self.adapter.fetchone(
+            "SELECT id FROM communication_systems WHERE system_name = ? AND is_active = 1",
+            (system_name,),
+        )
+        if system_row is None:
+            return CommunicationOptionMutationResult(status="not_found")
+
+        system_id = int(system_row["id"])
+
+        if parent_option_id is not None:
+            parent_row = self.adapter.fetchone(
+                """
+                SELECT id
+                FROM communication_options
+                WHERE id = ?
+                  AND communication_system_id = ?
+                  AND is_active = 1
+                """,
+                (parent_option_id, system_id),
+            )
+            if parent_row is None:
+                return CommunicationOptionMutationResult(status="not_found")
+
+        existing_row = self.adapter.fetchone(
+            """
+            SELECT id, is_active
+            FROM communication_options
+            WHERE communication_system_id = ?
+              AND COALESCE(parent_option_id, 0) = COALESCE(?, 0)
+              AND option_value = ?
+            """,
+            (system_id, parent_option_id, normalized_value),
+        )
+        if existing_row is not None:
+            existing_option_id = int(existing_row["id"])
+            if bool(existing_row["is_active"]):
+                return CommunicationOptionMutationResult(
+                    status="already_exists",
+                    option_id=existing_option_id,
+                )
+
+            self.adapter.execute(
+                """
+                UPDATE communication_options
+                SET option_label = ?,
+                    child_label = ?,
+                    sort_order = ?,
+                    is_active = 1
+                WHERE id = ?
+                """,
+                (normalized_label, child_label, sort_order, existing_option_id),
+            )
+            self._commit_if_needed()
+            self._bind_adapter_state()
+            return CommunicationOptionMutationResult(
+                status="reactivated",
+                option_id=existing_option_id,
+                changed=True,
+            )
+
+        cursor = self.adapter.execute(
+            """
+            INSERT INTO communication_options (
+                communication_system_id,
+                option_value,
+                option_label,
+                parent_option_id,
+                child_label,
+                sort_order,
+                is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            """,
+            (system_id, normalized_value, normalized_label, parent_option_id, child_label, sort_order),
+        )
+        self._commit_if_needed()
+        self._bind_adapter_state()
+
+        inserted_option_id = cursor.lastrowid
+        if inserted_option_id is None:
+            raise RuntimeError("SQLite did not return a row ID for the inserted communication option.")
+
+        return CommunicationOptionMutationResult(
+            status="created",
+            option_id=inserted_option_id,
+            changed=True,
+        )
+
+    def rename_communication_option(
+        self,
+        *,
+        option_id: int,
+        option_label: str,
+    ) -> CommunicationOptionMutationResult:
+        """Rename one communication option row without rewriting saved entries."""
+        normalized_label = self._normalize_required_config_text(option_label, "option_label")
+        existing_row = self.adapter.fetchone(
+            "SELECT id, option_label, is_active FROM communication_options WHERE id = ?",
+            (option_id,),
+        )
+        if existing_row is None:
+            return CommunicationOptionMutationResult(status="not_found")
+        if not bool(existing_row["is_active"]):
+            return CommunicationOptionMutationResult(status="already_inactive", option_id=option_id)
+        if str(existing_row["option_label"]) == normalized_label:
+            return CommunicationOptionMutationResult(status="unchanged", option_id=option_id)
+
+        self.adapter.execute(
+            "UPDATE communication_options SET option_label = ? WHERE id = ?",
+            (normalized_label, option_id),
+        )
+        self._commit_if_needed()
+        self._bind_adapter_state()
+        return CommunicationOptionMutationResult(
+            status="updated",
+            option_id=option_id,
+            changed=True,
+        )
+
+    def deactivate_communication_option(
+        self,
+        *,
+        option_id: int,
+    ) -> CommunicationOptionMutationResult:
+        """Soft-deactivate one communication option subtree for future use only."""
+        existing_row = self.adapter.fetchone(
+            "SELECT id, is_active FROM communication_options WHERE id = ?",
+            (option_id,),
+        )
+        if existing_row is None:
+            return CommunicationOptionMutationResult(status="not_found")
+        if not bool(existing_row["is_active"]):
+            return CommunicationOptionMutationResult(status="already_inactive", option_id=option_id)
+
+        self.adapter.execute(
+            """
+            WITH RECURSIVE option_subtree(id) AS (
+                SELECT id
+                FROM communication_options
+                WHERE id = ?
+
+                UNION ALL
+
+                SELECT child.id
+                FROM communication_options AS child
+                JOIN option_subtree AS parent
+                    ON child.parent_option_id = parent.id
+            )
+            UPDATE communication_options
+            SET is_active = 0
+            WHERE id IN (SELECT id FROM option_subtree)
+            """,
+            (option_id,),
+        )
+        self._commit_if_needed()
+        self._bind_adapter_state()
+        return CommunicationOptionMutationResult(
+            status="deactivated",
+            option_id=option_id,
+            changed=True,
+        )
+
+    def replace_communication_portability_bundle(
+        self,
+        bundle: CommunicationPortabilityBundle,
+    ) -> None:
+        """Replace active communication config exactly to match one validated bundle."""
+        started_transaction = not self.adapter._explicit_transaction_active
+        if started_transaction:
+            self.begin_transaction()
+
+        try:
+            imported_system_names = tuple(
+                system.system_name
+                for system in bundle.communication_systems
+            )
+
+            for system in bundle.communication_systems:
+                system_id = self._upsert_communication_system(system)
+                self._replace_communication_option_branch(
+                    system_id=system_id,
+                    parent_option_id=None,
+                    options=system.options,
+                )
+                self._replace_communication_qualifiers(
+                    system_id=system_id,
+                    qualifiers=system.qualifiers,
+                )
+
+            self._deactivate_missing_communication_systems(imported_system_names)
+
+            if started_transaction:
+                self.commit()
+        except Exception:
+            if started_transaction:
+                self.rollback()
+            raise
+        finally:
+            self._bind_adapter_state()
 
     def create_communication_entry(self, entry: CommunicationEntry) -> int:
         """Persist a communication entry and return its database-assigned ID."""
@@ -620,6 +879,429 @@ class EventLogRepository(EventLogAdapter, BaseRepository):
         except (TypeError, ValueError):
             LOGGER.warning("Invalid setting %s value %r; using default %r.", key, raw_value, default)
             return default
+
+    def _upsert_communication_system(
+        self,
+        system: PortableCommunicationSystem,
+    ) -> int:
+        existing_row = self.adapter.fetchone(
+            "SELECT id FROM communication_systems WHERE system_name = ?",
+            (system.system_name,),
+        )
+        if existing_row is None:
+            cursor = self.adapter.execute(
+                """
+                INSERT INTO communication_systems (
+                    system_name,
+                    system_type,
+                    child_label,
+                    sort_order,
+                    is_active
+                )
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (
+                    system.system_name,
+                    system.system_type,
+                    system.child_label,
+                    system.sort_order,
+                ),
+            )
+            inserted_system_id = cursor.lastrowid
+            if inserted_system_id is None:
+                raise RuntimeError("SQLite did not return a row ID for the inserted communication system.")
+            return int(inserted_system_id)
+
+        system_id = int(existing_row["id"])
+        self.adapter.execute(
+            """
+            UPDATE communication_systems
+            SET system_type = ?,
+                child_label = ?,
+                sort_order = ?,
+                is_active = 1
+            WHERE id = ?
+            """,
+            (
+                system.system_type,
+                system.child_label,
+                system.sort_order,
+                system_id,
+            ),
+        )
+        return system_id
+
+    def _replace_communication_option_branch(
+        self,
+        *,
+        system_id: int,
+        parent_option_id: int | None,
+        options: tuple[PortableCommunicationOption, ...],
+    ) -> None:
+        existing_rows = self.adapter.fetch(
+            """
+            SELECT id, option_value
+            FROM communication_options
+            WHERE communication_system_id = ?
+              AND COALESCE(parent_option_id, 0) = COALESCE(?, 0)
+            ORDER BY id
+            """,
+            (system_id, parent_option_id),
+        )
+        existing_rows_by_value = {
+            str(row["option_value"]): row
+            for row in existing_rows
+        }
+        imported_option_values: set[str] = set()
+
+        for option in options:
+            imported_option_values.add(option.option_value)
+            existing_row = existing_rows_by_value.get(option.option_value)
+            if existing_row is None:
+                cursor = self.adapter.execute(
+                    """
+                    INSERT INTO communication_options (
+                        communication_system_id,
+                        option_value,
+                        option_label,
+                        parent_option_id,
+                        child_label,
+                        sort_order,
+                        is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        system_id,
+                        option.option_value,
+                        option.option_label,
+                        parent_option_id,
+                        option.child_label,
+                        option.sort_order,
+                    ),
+                )
+                option_id = cursor.lastrowid
+                if option_id is None:
+                    raise RuntimeError(
+                        "SQLite did not return a row ID for the inserted communication option during portability import."
+                    )
+                current_option_id = int(option_id)
+            else:
+                current_option_id = int(existing_row["id"])
+                self.adapter.execute(
+                    """
+                    UPDATE communication_options
+                    SET option_label = ?,
+                        parent_option_id = ?,
+                        child_label = ?,
+                        sort_order = ?,
+                        is_active = 1
+                    WHERE id = ?
+                    """,
+                    (
+                        option.option_label,
+                        parent_option_id,
+                        option.child_label,
+                        option.sort_order,
+                        current_option_id,
+                    ),
+                )
+
+            self._replace_communication_option_branch(
+                system_id=system_id,
+                parent_option_id=current_option_id,
+                options=option.children,
+            )
+
+        for row in existing_rows:
+            if str(row["option_value"]) not in imported_option_values:
+                self._deactivate_communication_option_subtree(int(row["id"]))
+
+    def _replace_communication_qualifiers(
+        self,
+        *,
+        system_id: int,
+        qualifiers: tuple[PortableCommunicationQualifier, ...],
+    ) -> None:
+        self.adapter.execute(
+            "DELETE FROM communication_qualifiers_config WHERE communication_system_id = ?",
+            (system_id,),
+        )
+        for qualifier in qualifiers:
+            self.adapter.execute(
+                """
+                INSERT INTO communication_qualifiers_config (
+                    communication_system_id,
+                    qualifier_key,
+                    label,
+                    field_type,
+                    valid_values,
+                    default_value,
+                    help_text,
+                    visibility_mode
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    system_id,
+                    qualifier.qualifier_key,
+                    qualifier.label,
+                    qualifier.field_type,
+                    self._serialize_communication_qualifier_valid_values(qualifier.valid_values),
+                    self._serialize_communication_qualifier_default_value(qualifier.default_value),
+                    qualifier.help_text,
+                    qualifier.visibility_mode,
+                ),
+            )
+
+    def _deactivate_missing_communication_systems(
+        self,
+        imported_system_names: tuple[str, ...],
+    ) -> None:
+        if imported_system_names:
+            placeholders = ", ".join("?" for _ in imported_system_names)
+            self.adapter.execute(
+                f"UPDATE communication_systems SET is_active = 0 WHERE system_name NOT IN ({placeholders})",
+                imported_system_names,
+            )
+            self.adapter.execute(
+                f"""
+                UPDATE communication_options
+                SET is_active = 0
+                WHERE communication_system_id IN (
+                    SELECT id
+                    FROM communication_systems
+                    WHERE system_name NOT IN ({placeholders})
+                )
+                """,
+                imported_system_names,
+            )
+            return
+
+        self.adapter.execute("UPDATE communication_systems SET is_active = 0")
+        self.adapter.execute("UPDATE communication_options SET is_active = 0")
+
+    def _deactivate_communication_option_subtree(self, option_id: int) -> None:
+        self.adapter.execute(
+            """
+            WITH RECURSIVE option_subtree(id) AS (
+                SELECT id
+                FROM communication_options
+                WHERE id = ?
+
+                UNION ALL
+
+                SELECT child.id
+                FROM communication_options AS child
+                JOIN option_subtree AS parent
+                    ON child.parent_option_id = parent.id
+            )
+            UPDATE communication_options
+            SET is_active = 0
+            WHERE id IN (SELECT id FROM option_subtree)
+            """,
+            (option_id,),
+        )
+
+    def _get_active_communication_options_by_system(
+        self,
+    ) -> dict[int, tuple[CommunicationOptionConfig, ...]]:
+        """Return recursive active option trees keyed by communication-system ID."""
+        option_rows = self.adapter.fetch(
+            """
+            SELECT
+                co.id,
+                co.communication_system_id,
+                co.option_value,
+                co.option_label,
+                co.parent_option_id,
+                co.child_label,
+                co.sort_order
+            FROM communication_options AS co
+            JOIN communication_systems AS cs
+                ON cs.id = co.communication_system_id
+            WHERE cs.is_active = 1
+              AND co.is_active = 1
+            ORDER BY
+                co.communication_system_id,
+                co.parent_option_id IS NOT NULL,
+                COALESCE(co.parent_option_id, 0),
+                co.sort_order IS NULL,
+                co.sort_order,
+                co.option_label,
+                co.option_value,
+                co.id
+            """
+        )
+
+        rows_by_system: dict[int, dict[int | None, list[sqlite3.Row]]] = {}
+        for row in option_rows:
+            system_id = int(row["communication_system_id"])
+            parent_option_id = cast(int | None, row["parent_option_id"])
+            rows_by_parent = rows_by_system.setdefault(system_id, {})
+            rows_by_parent.setdefault(parent_option_id, []).append(row)
+
+        option_trees: dict[int, tuple[CommunicationOptionConfig, ...]] = {}
+        for system_id, rows_by_parent in rows_by_system.items():
+            option_trees[system_id] = self._build_communication_option_branch(
+                rows_by_parent,
+                parent_option_id=None,
+            )
+        return option_trees
+
+    def _build_communication_option_branch(
+        self,
+        rows_by_parent: dict[int | None, list[sqlite3.Row]],
+        parent_option_id: int | None,
+    ) -> tuple[CommunicationOptionConfig, ...]:
+        """Recursively assemble child options beneath one parent option ID."""
+        return tuple(
+            CommunicationOptionConfig(
+                option_id=int(row["id"]),
+                option_value=str(row["option_value"]),
+                option_label=str(row["option_label"]),
+                child_label=cast(str | None, row["child_label"]),
+                sort_order=cast(int | None, row["sort_order"]),
+                children=self._build_communication_option_branch(
+                    rows_by_parent,
+                    parent_option_id=int(row["id"]),
+                ),
+            )
+            for row in rows_by_parent.get(parent_option_id, [])
+        )
+
+    def _get_active_communication_qualifiers_by_system(
+        self,
+    ) -> dict[int, tuple[CommunicationQualifierConfig, ...]]:
+        """Return active-system qualifier definitions keyed by system ID."""
+        qualifier_rows = self.adapter.fetch(
+            """
+            SELECT
+                cqc.communication_system_id,
+                cqc.qualifier_key,
+                cqc.label,
+                cqc.field_type,
+                cqc.valid_values,
+                cqc.default_value,
+                cqc.help_text,
+                cqc.visibility_mode
+            FROM communication_qualifiers_config AS cqc
+            JOIN communication_systems AS cs
+                ON cs.id = cqc.communication_system_id
+            WHERE cs.is_active = 1
+            ORDER BY
+                cqc.communication_system_id,
+                cqc.qualifier_key,
+                cqc.id
+            """
+        )
+
+        qualifiers_by_system: dict[int, list[CommunicationQualifierConfig]] = {}
+        for row in qualifier_rows:
+            system_id = int(row["communication_system_id"])
+            qualifiers_by_system.setdefault(system_id, []).append(
+                self._row_to_communication_qualifier_config(row)
+            )
+
+        return {
+            system_id: tuple(qualifiers)
+            for system_id, qualifiers in qualifiers_by_system.items()
+        }
+
+    @staticmethod
+    def _row_to_communication_system_config(
+        row: sqlite3.Row,
+        options: tuple[CommunicationOptionConfig, ...],
+        qualifiers: tuple[CommunicationQualifierConfig, ...],
+    ) -> CommunicationSystemConfig:
+        """Convert one communication-system row plus related data into a read model."""
+        return CommunicationSystemConfig(
+            system_id=int(row["id"]),
+            system_name=str(row["system_name"]),
+            system_type=str(row["system_type"]),
+            child_label=cast(str | None, row["child_label"]),
+            sort_order=cast(int | None, row["sort_order"]),
+            options=options,
+            qualifiers=qualifiers,
+        )
+
+    def _row_to_communication_qualifier_config(
+        self,
+        row: sqlite3.Row,
+    ) -> CommunicationQualifierConfig:
+        """Convert one qualifier row into a caller-facing config shape."""
+        field_type = str(row["field_type"])
+        raw_default_value = cast(str | None, row["default_value"])
+
+        return CommunicationQualifierConfig(
+            qualifier_key=str(row["qualifier_key"]),
+            label=str(row["label"]),
+            field_type=field_type,
+            valid_values=self._deserialize_valid_values(cast(str | None, row["valid_values"])),
+            default_value=self._deserialize_qualifier_default_value(field_type, raw_default_value),
+            help_text=cast(str | None, row["help_text"]),
+            visibility_mode=str(row["visibility_mode"]),
+        )
+
+    @staticmethod
+    def _deserialize_valid_values(raw_value: str | None) -> tuple[str, ...] | None:
+        """Convert stored JSON arrays for qualifier valid-values into Python tuples."""
+        if raw_value is None:
+            return None
+
+        decoded_value = json.loads(raw_value)
+        if not isinstance(decoded_value, list):
+            raise ValueError("Qualifier valid_values must decode to a JSON array.")
+
+        return tuple(str(value) for value in decoded_value)
+
+    @staticmethod
+    def _deserialize_qualifier_default_value(
+        field_type: str,
+        raw_value: str | None,
+    ) -> bool | str | None:
+        """Convert stored qualifier defaults into stable Python values."""
+        if raw_value is None:
+            return None
+
+        if field_type != "boolean":
+            return raw_value
+
+        normalized_value = raw_value.strip().lower()
+        if normalized_value == "true":
+            return True
+        if normalized_value == "false":
+            return False
+
+        raise ValueError(f"Unsupported boolean default value: {raw_value!r}")
+
+    @staticmethod
+    def _serialize_communication_qualifier_valid_values(
+        valid_values: tuple[str, ...] | None,
+    ) -> str | None:
+        """Convert qualifier valid-values into the SQLite JSON text representation."""
+        if valid_values is None:
+            return None
+        return json.dumps(list(valid_values))
+
+    @staticmethod
+    def _serialize_communication_qualifier_default_value(
+        default_value: bool | str | None,
+    ) -> str | None:
+        """Convert stable qualifier defaults into the SQLite text representation."""
+        if default_value is None:
+            return None
+        if isinstance(default_value, bool):
+            return "true" if default_value else "false"
+        return default_value
+
+    @staticmethod
+    def _normalize_required_config_text(value: str, field_name: str) -> str:
+        """Trim and validate required communication-config text inputs."""
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise ValueError(f"{field_name} must not be empty.")
+        return normalized_value
 
     def _resolve_edited_flag(
         self,

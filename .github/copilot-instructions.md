@@ -6,7 +6,7 @@
 - **Name**: EventLog (Platoon Event Logger)
 - **Type**: Python 3.14 desktop application
 - **Status**: Structure complete, implementation pending
-- **Environment**: Offline only, NO GIT (changes are permanent!)
+- **Environment**: Offline only; Git is available in the workspace
 
 ## Critical: Read These Files First
 
@@ -46,13 +46,22 @@
 - **Human Docs**: `docs/architecture/root_architecture.md` and `docs/design/root_design.md` for comprehensive overview
 
 ## Critical Rules
-- ⚠️ **NO GIT** - Changes are permanent, validate everything before acting
+- ⚠️ **Git is available** - Use Git commands when helpful, but still validate everything before acting
 - ✅ **Read before editing** - Always read files before making changes
 - ✅ **Validate after editing** - Use get_errors to check your work
 - ✅ **Update AI memory aggressively** - Document user preferences immediately
 - ✅ **Architecture/Design docs are NOT AI memory** - Keep them separate
 - ❌ **Don't make massive changes without discussion**
 - ❌ **Don't invent designs/implementations without user input**
+
+## Approved Test Command Policy
+- Prefer a very small, stable pytest command family to reduce approval prompts.
+- Default broad validation command: `python -m pytest`
+- Allowed focused command shape: `python -m pytest .\tests\<relative-path-to-single-test-file>.py`
+- Do **not** invent extra pytest flags during normal validation; rely on `pytest.ini` defaults unless the user explicitly asks otherwise.
+- Do **not** run multiple test files in one command.
+- Do **not** use node selectors like `::TestClass::test_name` or filters like `-k` unless the user explicitly asks.
+- Reuse the exact approved command shapes above rather than creating variants with reordered files or extra options.
 
 ## Tech Stack
 - Python 3.14 (stdlib only for app, zero third-party dependencies)

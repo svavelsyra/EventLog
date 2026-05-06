@@ -2,7 +2,7 @@
 
 **Purpose**: SQLite-specific lessons, query patterns, and database implementation pitfalls learned during development.
 
-**Last Updated**: 2026-05-04 (Session 069 - Added centralized startup backend-policy ownership lesson)
+**Last Updated**: 2026-05-05 (Session 088 - Added communication portability import/apply ownership lesson)
 
 ## Session 032 - Repository Settings Bootstrap
 
@@ -37,6 +37,17 @@
 - The user explicitly prefers a recursive or tree-like structure over sprawling special-case `if/else` handling when it makes the model cleaner and more uniform.
 - For communication configuration, a recursive shape may still be desirable even if the current operator-facing UI caps depth at three tiers.
 - The real design question is not “avoid recursion?” but rather “how much recursion should the business rules permit, and where should the current UI/runtime place its practical depth limit?”
+
+## Session 088 - Whole-Bundle Communication Portability Apply Should Stay Repository-Owned and Exact
+
+- When importing approved communication portability bundles, keep contract validation and payload parsing in Core, but keep the actual database replacement/deactivation work in a repository-owned seam.
+- Prefer one exact-replace apply method for active communication configuration over stitching together many smaller targeted mutations from Core; it is more deterministic, more reviewable, and easier to keep transactional.
+- A practical SQLite policy is:
+  - upsert/reactivate imported systems by stable `system_name`
+  - recursively upsert imported options within each parent scope by stable `option_value`
+  - soft-deactivate missing systems/options via `is_active`
+  - replace qualifier rows exactly per system because they are runtime metadata rather than historical entry snapshots
+- Validate the full bundle before entering the repository apply path so malformed payloads fail before any partial import writes occur.
 
 ## Session 054 - Reset Integration Tests Need Real On-Disk SQLite Targets
 

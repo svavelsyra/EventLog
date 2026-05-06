@@ -4,6 +4,20 @@
 - **pytest** for all tests
 - Both **unit tests** and **integration tests** required
 
+## Approved Test Command Policy
+- Use `python -m pytest` as the default validation command.
+- A focused test rerun may use exactly one file under `tests/` in this canonical form: `python -m pytest .\tests\<relative-path-to-single-test-file>.py`
+- Prefer reusing one of those two command shapes over inventing narrower or more specialized variants.
+- Rely on `pytest.ini` for normal verbosity, traceback, and coverage defaults instead of adding extra flags during routine validation.
+
+### Not Allowed Without Explicit User Approval
+- Extra pytest flags beyond the approved command shapes above
+- Multiple test files in one command
+- Reordered multi-file combinations
+- Node selectors like `::TestClass::test_name`
+- Expression filters like `-k`
+- Switching between `pytest` and `python -m pytest`; use `python -m pytest` consistently
+
 ## Testing Philosophy: Avoid Mocking
 
 ### Unit Tests
@@ -59,9 +73,9 @@ Note: Setup is usually the expensive part so better an extra cheap assertion tha
 - Critical paths must have integration tests
 
 ## Handling Flaky Tests
-- Use `pytest-rerunfailures` to automatically retry flaky tests
-- Mark flaky tests with `@pytest.mark.flaky(reruns=3)` decorator
-- Run with `pytest --reruns 3` to retry all failed tests up to 3 times
+- Prefer fixing flaky tests over introducing retry-command variants.
+- If a test is flaky, document why it is flaky and what makes it non-deterministic.
+- If retry behavior is ever needed, ask the user before introducing any non-approved pytest flags or plugin-dependent commands.
 - **Document why a test is flaky** and what makes it non-deterministic
 - **Goal**: Fix flaky tests, don't just retry them forever
 - Common flaky causes: timing issues, external state, threading, tkinter startup/shutdown (prefer a stable fix but can be complicated.)

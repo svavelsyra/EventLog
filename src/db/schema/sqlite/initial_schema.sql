@@ -1,6 +1,6 @@
 -- EventLog Database Schema
--- Database Version: 0.1.1 (Epic 001 - Core entity tables + repository settings)
--- Last Updated: 2026-04-28
+-- Database Version: 0.1.1 (Epic 001 core tables + Epic 003 communication config seed foundation)
+-- Last Updated: 2026-05-05
 --
 -- This is the INITIAL schema for NEW databases.
 -- New installations run this file directly and do not replay migrations.
@@ -8,8 +8,9 @@
 -- so it continues to represent the complete schema for a fresh database.
 --
 -- Scope note:
--- - Includes only the three Epic 001 entity tables
--- - Excludes configuration, attachment, and structured report tables
+-- - Includes the three Epic 001 entity tables and the first Epic 003 communication configuration tables
+-- - Communication configuration remains runtime metadata; saved communication entries still keep their own snapshot fields
+-- - Excludes attachment and structured report tables
 -- - Uses SQLite-compatible types only
 
 -- ========== COMMUNICATION ENTRIES ==========
@@ -148,4 +149,167 @@ VALUES (
     'Grace period in seconds before repository updates automatically mark entries as edited.',
     strftime('%Y-%m-%dT%H:%M:%f', 'now')
 );
+
+-- ========== COMMUNICATION CONFIGURATION ==========
+-- Runtime configuration for communication systems, recursive option paths,
+-- and top-level qualifier behavior. Communication log entries keep the values
+-- actually used at log time; these tables drive current UI/validation only.
+
+CREATE TABLE IF NOT EXISTS communication_systems (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    system_name TEXT NOT NULL UNIQUE CHECK (system_name != ''),
+    system_type TEXT NOT NULL CHECK (system_type != ''),
+    child_label TEXT NULL,
+    sort_order INTEGER NULL,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_comm_systems_active
+    ON communication_systems(is_active);
+CREATE INDEX IF NOT EXISTS idx_comm_systems_type
+    ON communication_systems(system_type);
+
+CREATE TABLE IF NOT EXISTS communication_options (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    communication_system_id INTEGER NOT NULL,
+    option_value TEXT NOT NULL CHECK (option_value != ''),
+    option_label TEXT NOT NULL CHECK (option_label != ''),
+    parent_option_id INTEGER NULL,
+    child_label TEXT NULL,
+    sort_order INTEGER NULL,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    FOREIGN KEY (communication_system_id) REFERENCES communication_systems(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_option_id) REFERENCES communication_options(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_comm_option_system
+    ON communication_options(communication_system_id);
+CREATE INDEX IF NOT EXISTS idx_comm_option_parent
+    ON communication_options(parent_option_id);
+CREATE INDEX IF NOT EXISTS idx_comm_option_active
+    ON communication_options(is_active);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_comm_option_unique_path
+    ON communication_options(communication_system_id, COALESCE(parent_option_id, 0), option_value);
+
+CREATE TABLE IF NOT EXISTS communication_qualifiers_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    communication_system_id INTEGER NOT NULL,
+    qualifier_key TEXT NOT NULL CHECK (qualifier_key != ''),
+    label TEXT NOT NULL CHECK (label != ''),
+    field_type TEXT NOT NULL CHECK (field_type IN ('enum', 'boolean', 'text')),
+    valid_values TEXT NULL,
+    default_value TEXT NULL,
+    help_text TEXT NULL,
+    visibility_mode TEXT NOT NULL DEFAULT 'editable' CHECK (visibility_mode IN ('editable', 'forced', 'hidden')),
+    FOREIGN KEY (communication_system_id) REFERENCES communication_systems(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_comm_qualifiers_system
+    ON communication_qualifiers_config(communication_system_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_comm_qualifiers_system_key
+    ON communication_qualifiers_config(communication_system_id, qualifier_key);
+
+INSERT OR IGNORE INTO communication_systems (
+    system_name,
+    system_type,
+    child_label,
+    sort_order,
+    is_active
+)
+VALUES
+    ('RA180', 'Radio System', 'Channel', 10, 1),
+    ('Motorola', 'Radio System', 'Channel', 20, 1),
+    ('Rakel', 'Radio System', 'Channel', 30, 1),
+    ('Courier', 'Courier', NULL, 40, 1);
+
+INSERT OR IGNORE INTO communication_options (
+    communication_system_id,
+    option_value,
+    option_label,
+    parent_option_id,
+    child_label,
+    sort_order,
+    is_active
+)
+VALUES
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '1', 'Channel 1', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '2', 'Channel 2', NULL, NULL, 20, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '3', 'Channel 3', NULL, NULL, 30, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '4', 'Channel 4', NULL, NULL, 40, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '5', 'Channel 5', NULL, NULL, 50, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '6', 'Channel 6', NULL, NULL, 60, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '7', 'Channel 7', NULL, NULL, 70, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '8', 'Channel 8', NULL, NULL, 80, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '1', 'Channel 1', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '2', 'Channel 2', NULL, NULL, 20, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '3', 'Channel 3', NULL, NULL, 30, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '4', 'Channel 4', NULL, NULL, 40, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '5', 'Channel 5', NULL, NULL, 50, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '6', 'Channel 6', NULL, NULL, 60, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '7', 'Channel 7', NULL, NULL, 70, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '8', 'Channel 8', NULL, NULL, 80, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'X', 'Talkgroup X', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'Y', 'Talkgroup Y', NULL, NULL, 20, 1);
+
+INSERT OR IGNORE INTO communication_qualifiers_config (
+    communication_system_id,
+    qualifier_key,
+    label,
+    field_type,
+    valid_values,
+    default_value,
+    help_text,
+    visibility_mode
+)
+VALUES
+    (
+        (SELECT id FROM communication_systems WHERE system_name = 'RA180'),
+        'encrypted',
+        'Krypterad',
+        'boolean',
+        NULL,
+        'false',
+        'RA180 can be logged as clear or encrypted traffic.',
+        'editable'
+    ),
+    (
+        (SELECT id FROM communication_systems WHERE system_name = 'RA180'),
+        'data',
+        'Data',
+        'boolean',
+        NULL,
+        'false',
+        'Mark when the RA180 path was used with attached data equipment.',
+        'editable'
+    ),
+    (
+        (SELECT id FROM communication_systems WHERE system_name = 'Motorola'),
+        'encrypted',
+        'Krypterad',
+        'boolean',
+        NULL,
+        'false',
+        'Motorola is treated as clear-only in the Phase 1 defaults.',
+        'forced'
+    ),
+    (
+        (SELECT id FROM communication_systems WHERE system_name = 'Rakel'),
+        'encrypted',
+        'Krypterad',
+        'boolean',
+        NULL,
+        'true',
+        'Rakel is treated as encrypted-only in the Phase 1 defaults.',
+        'forced'
+    ),
+    (
+        (SELECT id FROM communication_systems WHERE system_name = 'Courier'),
+        'encrypted',
+        'Krypterad',
+        'boolean',
+        NULL,
+        'false',
+        'Courier keeps the shared qualifier model without exposing radio-only choices.',
+        'hidden'
+    );
 

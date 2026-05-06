@@ -30,7 +30,7 @@
 
 ### Version Specification Philosophy
 - Use `>=` not `==` for versions
-- Reason: No git means can't rollback, need flexibility for bug fixes
+- Reason: Prefer flexibility for bug fixes and maintenance over unnecessary version pinning
 - Avoid version locking unless absolutely necessary
 
 ---
@@ -102,11 +102,10 @@ SQLite Dialect Implementation
 
 ## Key Constraints
 
-### No Git - Changes are Permanent
-- Cannot revert mistakes
-- Must be extra careful with changes
-- Read before edit, validate after edit
-- Think before acting
+### Git Availability
+- Git is available in the workspace.
+- Older project notes that said "NO GIT" are outdated and should not block normal Git status/diff/log usage when it is helpful.
+- Even with Git available, still read before edit, validate after edit, and think before acting.
 
 ### Small Screens - Limited Display Space
 - Target: Netbooks with ~1024x600 resolution
@@ -236,5 +235,5 @@ SQLite Dialect Implementation
 
 ---
 
-**Last Updated**: 2026-05-04 (Session 064 - Clarified config-owned key-file policy)
+**Last Updated**: 2026-05-06 (Session 089 - Updated stale no-Git guidance after user confirmation that Git is available)
 
