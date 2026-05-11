@@ -1,6 +1,6 @@
 -- EventLog Database Schema
--- Database Version: 0.1.1 (Epic 001 core tables + Epic 003 communication config seed foundation)
--- Last Updated: 2026-05-05
+-- Database Version: 0.1.2 (adds runtime user_preferences foundation for Epic 005.002)
+-- Last Updated: 2026-05-11
 --
 -- This is the INITIAL schema for NEW databases.
 -- New installations run this file directly and do not replay migrations.
@@ -148,6 +148,15 @@ VALUES (
     '300',
     'Grace period in seconds before repository updates automatically mark entries as edited.',
     strftime('%Y-%m-%dT%H:%M:%f', 'now')
+);
+
+-- ========== RUNTIME USER PREFERENCES ==========
+-- Stores approved database-backed user preferences loaded after repository startup.
+CREATE TABLE IF NOT EXISTS user_preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    description TEXT NULL,
+    modified_time TEXT NOT NULL CHECK (modified_time != '')
 );
 
 -- ========== COMMUNICATION CONFIGURATION ==========

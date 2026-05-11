@@ -12,6 +12,9 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
 
+from src.config import MainWindowConfig
+from src.core.app_runtime_state import AppRuntimeState
+
 
 ShellActionCallback = Callable[[], str | None]
 
@@ -24,16 +27,29 @@ class MainWindowShellView:
     def __init__(
         self,
         root: tk.Tk,
+        app_runtime_state: AppRuntimeState,
         *,
+        window_config: MainWindowConfig | None = None,
+        template_callback: ShellActionCallback | None = None,
         reset_callback: ShellActionCallback | None = None,
         close_callback: ShellActionCallback | None = None,
     ) -> None:
         self.root = root
+        self.app_runtime_state = app_runtime_state
+        self._window_config = window_config or MainWindowConfig()
+        self._template_callback = template_callback
         self._reset_callback = reset_callback
         self._close_callback = close_callback
         self.root.title("EventLog - Pluton Event Logger")
-        self.root.minsize(800, 600)
-        self.root.geometry("1200x700")
+        self.menu_bar = tk.Menu(self.root)
+        self.tools_menu = tk.Menu(self.menu_bar, tearoff=False)
+        self.tools_menu.add_command(
+            label="Skriv configmall",
+            command=self.handle_template_requested,
+        )
+        self.menu_bar.add_cascade(label="Verktyg", menu=self.tools_menu)
+        self.root.configure(menu=self.menu_bar)
+        self._apply_window_config(self._window_config)
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
 
@@ -62,7 +78,7 @@ class MainWindowShellView:
             highlightcolor="#8e0000",
             highlightthickness=1,
             borderwidth=2,
-            relief=tk.RAISED,
+            relief="raised",
             cursor="hand2",
             padx=12,
             pady=6,
@@ -112,9 +128,29 @@ class MainWindowShellView:
         """Trigger the app-owned destructive reset callback when available."""
         self._run_shell_action(self._reset_callback)
 
+    def handle_template_requested(self) -> None:
+        """Trigger the app-owned config-template regeneration callback when available."""
+        self._run_shell_action(self._template_callback)
+
     def handle_close_requested(self) -> None:
         """Trigger the app-owned close callback when available."""
         self._run_shell_action(self._close_callback)
+
+    def snapshot_window_config(self) -> MainWindowConfig:
+        """Return the current main-window geometry/state for bootstrap persistence."""
+        self.root.update_idletasks()
+        try:
+            root_state = str(self.root.state())
+        except tk.TclError:
+            root_state = "normal"
+
+        return MainWindowConfig(
+            window_state="zoomed" if root_state == "zoomed" else "normal",
+            window_width=max(1, self.root.winfo_width()),
+            window_height=max(1, self.root.winfo_height()),
+            window_x=max(0, self.root.winfo_x()),
+            window_y=max(0, self.root.winfo_y()),
+        )
 
     def _build_placeholder_tab(
         self,
@@ -149,6 +185,27 @@ class MainWindowShellView:
         status_message = callback()
         if status_message is not None:
             self.set_status_message(status_message)
+
+    def _apply_window_config(self, window_config: MainWindowConfig) -> None:
+        screen_width = max(1, self.root.winfo_screenwidth())
+        screen_height = max(1, self.root.winfo_screenheight())
+        minimum_width = min(800, screen_width)
+        minimum_height = min(600, screen_height)
+        self.root.minsize(minimum_width, minimum_height)
+
+        width = min(max(window_config.window_width, minimum_width), screen_width)
+        height = min(max(window_config.window_height, minimum_height), screen_height)
+        x_position = min(max(window_config.window_x, 0), max(screen_width - width, 0))
+        y_position = min(max(window_config.window_y, 0), max(screen_height - height, 0))
+
+        self.root.geometry(f"{width}x{height}+{x_position}+{y_position}")
+
+        try:
+            self.root.state(
+                "zoomed" if window_config.window_state == "zoomed" else "normal"
+            )
+        except tk.TclError:
+            self.root.state("normal")
 
 
 __all__ = ["MainWindowShellView"]

@@ -2,7 +2,7 @@
 
 **Project**: Platoon Event Logger  
 **Version**: 1.0  
-**Last Updated**: 2026-05-04  
+**Last Updated**: 2026-05-07  
 
 ## Purpose
 A desktop application for logging events during platoon staff operations. This includes:
@@ -114,9 +114,18 @@ The application follows a strict layered architecture with clear separation of c
 - Persistence-owned startup capability seams may expose only stable technical startup requirements such as field identity, input kind, and required/editable flags.
 - The centralized persistence-owned startup policy seam is `src/db/repositories/bootstrap_backend_policy.py`; app wiring and presenters should depend on that seam instead of splitting startup facts across multiple helper modules.
 - GUI code owns display labels, button wording, and browse-button behavior derived from those stable startup field identities; presenter-facing field-label metadata must not leak downward into persistence contracts.
+- Startup dialog interaction is GUI-owned above that persistence seam: presenters recompute dialog state, views render that state, and controller/app wiring read one structured submission back from the view.
+- The preferred startup GUI boundary is state-driven rendering plus structured submission readback, not per-field getter/setter or callback growth as each dynamic field is added.
 - The create flow validates the operator's selected setup against the administrator-defined creation-time policy envelope, including allowed technologies and allowed credential combinations.
 - Repository creation happens only after the selected technology-specific startup flow has collected and validated enough information to proceed.
 - Malformed bootstrap memory may prevent automatic repository creation, but it must not prevent the application from reaching a usable recovery/startup UI.
+
+### Startup GUI Ownership
+
+- The startup presenter owns dynamic decisions such as remembered-target use, visible startup fields, allowed modes, and presenter-controlled prefill values.
+- The startup view stays thin: it renders presenter state, captures operator input, manages focus/layout/widgets, and exposes structured readback.
+- The startup controller stays a thin adapter that wires callbacks, requests submissions, asks the presenter for recomputed state, and re-renders.
+- This split keeps backend-policy facts technical and stable while allowing the startup UI to remain dynamic without pushing Tk details into persistence.
 
 ### Policy Ownership
 

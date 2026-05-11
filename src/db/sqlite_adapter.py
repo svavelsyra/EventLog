@@ -7,7 +7,6 @@ primitives. Repository CRUD/query behavior remains in the repository layer.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
 from os import PathLike
 from pathlib import Path
@@ -35,8 +34,6 @@ except ImportError:  # pragma: no cover - exercised through runtime environment 
 LOGGER = logging.getLogger(__name__)
 SQLITE_APPLICATION_ID = 0x45564C47  # ASCII: EVLG
 SQLITE_USER_VERSION = 1
-SQLiteMigrationStep = Callable[["SQLiteAdapter"], None]
-_SQLITE_MIGRATION_STEPS: dict[int, SQLiteMigrationStep] = {}
 SQLCIPHER_WRONG_KEY_ERROR_SIGNATURES = (
     "file is not a database",
     "file is encrypted or is not a database",
@@ -73,8 +70,6 @@ def get_remembered_target_cleanup_metadata(
     return BackendCleanupMetadata(
         artifacts=tuple(artifact for artifact in candidate_artifacts if artifact.path.exists())
     )
-
-
 class SQLCipherUnavailable(CipherUnavailable):
     """Raised when SQLite encrypted mode is requested but SQLCipher support is unavailable."""
 
@@ -428,19 +423,6 @@ class SQLiteAdapter(DatabaseAdapter):
                 f"{application_id!r}; expected {SQLITE_APPLICATION_ID!r}."
             )
 
-    def _resolve_supported_migration(
-        self,
-        current_user_version: int,
-    ) -> Callable[[], None] | None:
-        """Return the supported migration step for the current SQLite version."""
-        migration_step = _SQLITE_MIGRATION_STEPS.get(current_user_version)
-        if migration_step is None:
-            return None
-
-        def _bound_migration_step() -> None:
-            migration_step(self)
-
-        return _bound_migration_step
 
     def _profile_label(self) -> str:
         """Return the current SQLite profile label used in validation errors."""

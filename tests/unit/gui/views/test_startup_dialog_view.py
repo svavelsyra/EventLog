@@ -11,7 +11,7 @@ from src.gui.presenters.startup_dialog_presenter import (
     StartupDialogMode,
     StartupDialogState,
 )
-from src.gui.views.startup_dialog_view import StartupDialogView
+from src.gui.views.startup_dialog_view import StartupDialogActionCallbacks, StartupDialogView
 
 
 pytestmark = pytest.mark.unit
@@ -33,6 +33,8 @@ def _make_state(
     include_password_confirmation_field: bool = False,
     include_key_file_field: bool = False,
     key_file_is_required: bool = False,
+    key_file_path: str = "",
+    operator: str = "",
 ) -> StartupDialogState:
     backend_fields: list[StartupFieldRequirement] = [
         StartupFieldRequirement(
@@ -78,8 +80,10 @@ def _make_state(
         min_password_length=8,
         password_policy_hint=password_policy_hint,
         allow_emergency_reset=allow_emergency_reset,
+        key_file_path=key_file_path,
         uses_remembered_target=uses_remembered_target,
         remembered_target_is_available=remembered_target_is_available,
+        operator=operator,
         show_target_source_selector=show_target_source_selector,
         show_dialect_picker=show_dialect_picker,
         backend_fields=tuple(backend_fields),
@@ -109,13 +113,18 @@ def _scenario_render_state_for_create(root: tk.Tk) -> dict[str, object]:
                 include_password_confirmation_field=True,
                 include_key_file_field=True,
                 key_file_is_required=False,
+                key_file_path="C:/keys/startup.key",
                 allow_emergency_reset=False,
+                operator="Sgt Example",
             )
         )
         view.window.update_idletasks()
         return {
             "title": view.window.title(),
             "summary_text": view.summary_label.cget("text"),
+            "user_section_manager": view.user_section.winfo_manager(),
+            "operator_label": view.operator_label.cget("text"),
+            "operator_value": view.operator_var.get(),
             "submit_label": view.submit_button.cget("text"),
             "mode_manager": view.mode_row.winfo_manager(),
             "mode_value": view.mode_var.get(),
@@ -132,6 +141,7 @@ def _scenario_render_state_for_create(root: tk.Tk) -> dict[str, object]:
             "password_policy_hint_text": view.password_policy_hint_label.cget("text"),
             "key_file_manager": _field_row(view, StartupFieldName.KEY_FILE_PATH).winfo_manager(),
             "key_file_label": _field_label(view, StartupFieldName.KEY_FILE_PATH),
+            "key_file_value": view.get_field_value(StartupFieldName.KEY_FILE_PATH),
             "visible_field_names": [
                 widgets.requirement.field_name
                 for widgets in view._field_widgets.values()
@@ -166,6 +176,7 @@ def _scenario_render_state_for_unlock_using_remembered_target(root: tk.Tk) -> di
         return {
             "title": view.window.title(),
             "summary_text": view.summary_label.cget("text"),
+            "user_section_manager": view.user_section.winfo_manager(),
             "submit_label": view.submit_button.cget("text"),
             "mode_value": view.mode_var.get(),
             "target_source_manager": view.target_source_row.winfo_manager(),
@@ -212,6 +223,7 @@ def _scenario_render_state_for_manual_unlock(root: tk.Tk) -> dict[str, object]:
         return {
             "title": view.window.title(),
             "summary_text": view.summary_label.cget("text"),
+            "user_section_manager": view.user_section.winfo_manager(),
             "mode_value": view.mode_var.get(),
             "target_source_manager": view.target_source_row.winfo_manager(),
             "target_source_value": view.use_remembered_target_var.get(),
@@ -241,6 +253,7 @@ def _scenario_render_state_for_neutral_sqlite_target_selection(root: tk.Tk) -> d
                 min_password_length=8,
                 password_policy_hint="Minst 8 tecken för nytt lösenord.",
                 allow_emergency_reset=False,
+                key_file_path="",
                 backend_fields=(
                     StartupFieldRequirement(
                         field_name=StartupFieldName.DATABASE_PATH,
@@ -271,16 +284,19 @@ def _scenario_render_state_for_neutral_sqlite_target_selection(root: tk.Tk) -> d
 def _scenario_get_submission(root: tk.Tk) -> dict[str, object]:
     view = StartupDialogView(root)
     try:
+        view.mode_var.set(StartupDialogMode.UNLOCK.value)
+        view.operator_var.set("Sgt Example")
         view.dialect_var.set("sqlite")
         view.set_field_value(StartupFieldName.DATABASE_PATH, "C:/data/eventlog.db")
         view.set_field_value(StartupFieldName.PASSWORD, "lösenord123")
         view.set_field_value(StartupFieldName.PASSWORD_CONFIRMATION, "lösenord123")
         view.set_field_value(StartupFieldName.KEY_FILE_PATH, "   ")
 
-        submission = view.get_submission(mode=StartupDialogMode.CREATE)
+        submission = view.get_submission()
         return {
             "mode": submission.mode,
             "dialect": submission.dialect,
+            "operator": submission.operator,
             "uses_remembered_target": submission.uses_remembered_target,
             "field_values": dict(submission.field_values),
         }
@@ -302,7 +318,11 @@ def _scenario_invoke_callbacks(root: tk.Tk) -> list[str]:
                 database_path="",
                 min_password_length=8,
                 password_policy_hint="Minst 8 tecken för nytt lösenord.",
-                allow_emergency_reset=False,
+                allow_emergency_reset=True,
+                key_file_path="",
+                remembered_target_is_available=True,
+                show_mode_selector=True,
+                show_target_source_selector=True,
                 backend_fields=(
                     StartupFieldRequirement(
                         field_name=StartupFieldName.DATABASE_PATH,
@@ -310,22 +330,39 @@ def _scenario_invoke_callbacks(root: tk.Tk) -> list[str]:
                         required=True,
                         editable=True,
                     ),
+                    StartupFieldRequirement(
+                        field_name=StartupFieldName.KEY_FILE_PATH,
+                        kind=StartupFieldKind.FILE_PATH,
+                        required=False,
+                        editable=True,
+                    ),
                 ),
             )
         )
-        view.set_submit_callback(lambda: events.append("submit"))
-        view.set_cancel_callback(lambda: events.append("cancel"))
-        view.set_emergency_reset_callback(lambda: events.append("reset"))
-        view.set_browse_database_callback(lambda: events.append("browse-database"))
-        view.set_browse_key_file_callback(lambda: events.append("browse"))
-        view.set_database_path_changed_callback(lambda: events.append("database-path-changed"))
+        view.set_action_callbacks(
+            StartupDialogActionCallbacks(
+                submit=lambda: events.append("submit"),
+                cancel=lambda: events.append("cancel"),
+                emergency_reset=lambda: events.append("reset"),
+                browse_database=lambda: events.append("browse-database"),
+                browse_key_file=lambda: events.append("browse"),
+            )
+        )
+        view.set_submission_changed_callback(lambda: events.append("submission-changed"))
 
         view.submit_button.invoke()
         view.cancel_button.invoke()
         view.emergency_reset_button.invoke()
         view._field_widgets[StartupFieldName.DATABASE_PATH].browse_button.invoke()
         view._field_widgets[StartupFieldName.KEY_FILE_PATH].browse_button.invoke()
-        view._handle_database_path_changed()
+        view.unlock_mode_button.invoke()
+        view.use_remembered_target_button.invoke()
+        view.dialect_combobox.event_generate("<<ComboboxSelected>>")
+        database_path_entry = view._field_widgets[StartupFieldName.DATABASE_PATH].entry
+        database_path_entry.focus_set()
+        view.window.update()
+        database_path_entry.event_generate("<KeyRelease>", when="tail")
+        view.window.update()
         view.handle_close_requested()
         return events
     finally:
@@ -372,6 +409,7 @@ def _scenario_render_state_without_selected_dialect(root: tk.Tk) -> dict[str, ob
             min_password_length=8,
             password_policy_hint="Minst 8 tecken för nytt lösenord.",
             allow_emergency_reset=False,
+            key_file_path="",
             backend_fields=(),
         )
         full_state = _make_state(
@@ -439,6 +477,7 @@ def _scenario_render_state_preserves_visible_field_values_across_rerenders(root:
             include_password_confirmation_field=True,
             include_key_file_field=True,
             key_file_is_required=False,
+            key_file_path="C:/keys/startup.key",
             allow_emergency_reset=False,
         )
         manual_unlock_state = _make_state(
@@ -452,19 +491,19 @@ def _scenario_render_state_preserves_visible_field_values_across_rerenders(root:
             remembered_target_is_available=True,
             show_target_source_selector=True,
             show_dialect_picker=True,
+            key_file_path="C:/keys/startup.key",
             password_policy_hint="",
         )
 
         view.render_state(create_state)
         view.set_field_value(StartupFieldName.PASSWORD, "lösenord123")
         view.set_field_value(StartupFieldName.PASSWORD_CONFIRMATION, "lösenord123")
-        view.set_field_value(StartupFieldName.KEY_FILE_PATH, "C:/keys/startup.key")
 
         view.render_state(manual_unlock_state)
-        unlock_submission = view.get_submission(mode=StartupDialogMode.UNLOCK)
+        unlock_submission = view.get_submission()
 
         view.render_state(create_state)
-        create_submission = view.get_submission(mode=StartupDialogMode.CREATE)
+        create_submission = view.get_submission()
 
         return {
             "unlock_password": unlock_submission.field_values[StartupFieldName.PASSWORD],
@@ -479,6 +518,73 @@ def _scenario_render_state_preserves_visible_field_values_across_rerenders(root:
         view.destroy()
 
 
+def _scenario_render_state_syncs_hidden_database_path_across_rerenders(root: tk.Tk) -> dict[str, object]:
+    view = StartupDialogView(root)
+    try:
+        manual_state = StartupDialogState(
+            mode=StartupDialogMode.UNLOCK,
+            title="EventLog - Öppna befintlig databas",
+            submit_label="Lås upp",
+            dialect="sqlite",
+            database_path="C:/manual/manual.db",
+            min_password_length=8,
+            password_policy_hint="",
+            allow_emergency_reset=True,
+            key_file_path="",
+            uses_remembered_target=False,
+            remembered_target_is_available=True,
+            show_target_source_selector=True,
+            show_dialect_picker=True,
+            backend_fields=(
+                StartupFieldRequirement(
+                    field_name=StartupFieldName.DATABASE_PATH,
+                    kind=StartupFieldKind.FILE_PATH,
+                    required=True,
+                    editable=True,
+                ),
+                StartupFieldRequirement(
+                    field_name=StartupFieldName.PASSWORD,
+                    kind=StartupFieldKind.PASSWORD,
+                ),
+            ),
+        )
+        remembered_target_state = StartupDialogState(
+            mode=StartupDialogMode.UNLOCK,
+            title="EventLog - Lås upp",
+            submit_label="Lås upp",
+            dialect="sqlite",
+            database_path="C:/remembered/remembered.db",
+            min_password_length=8,
+            password_policy_hint="",
+            allow_emergency_reset=True,
+            key_file_path="",
+            uses_remembered_target=True,
+            remembered_target_is_available=True,
+            show_target_source_selector=True,
+            show_dialect_picker=False,
+            backend_fields=(
+                StartupFieldRequirement(
+                    field_name=StartupFieldName.PASSWORD,
+                    kind=StartupFieldKind.PASSWORD,
+                ),
+            ),
+        )
+
+        view.render_state(manual_state)
+        view.set_field_value(StartupFieldName.DATABASE_PATH, "C:/stale/stale.db")
+
+        view.render_state(remembered_target_state)
+        submission = view.get_submission()
+
+        return {
+            "database_path_manager": _field_row(view, StartupFieldName.DATABASE_PATH).winfo_manager(),
+            "submission_database_path": submission.field_values[StartupFieldName.DATABASE_PATH],
+            "uses_remembered_target": submission.uses_remembered_target,
+        }
+    finally:
+        view.destroy()
+
+
 def test_render_state_for_create_shows_confirmation_and_optional_key_file(
     run_tk_scenario,
 ) -> None:
@@ -486,6 +592,9 @@ def test_render_state_for_create_shows_confirmation_and_optional_key_file(
 
     assert result["title"] == "EventLog - Skapa krypterad databas"
     assert result["summary_text"] == "EventLog - Skapa krypterad databas"
+    assert result["user_section_manager"] == "grid"
+    assert result["operator_label"] == "Operatör:"
+    assert result["operator_value"] == "Sgt Example"
     assert result["submit_label"] == "Skapa"
     assert result["mode_manager"] == ""
     assert result["mode_value"] == StartupDialogMode.CREATE.value
@@ -499,6 +608,7 @@ def test_render_state_for_create_shows_confirmation_and_optional_key_file(
     assert result["password_policy_hint_text"] == "Minst 8 tecken för nytt lösenord."
     assert result["key_file_manager"] == "grid"
     assert result["key_file_label"] == "Nyckelfil (valfritt):"
+    assert result["key_file_value"] == "C:/keys/startup.key"
     assert result["visible_field_names"] == [
         StartupFieldName.DATABASE_PATH,
         StartupFieldName.PASSWORD,
@@ -515,6 +625,7 @@ def test_render_state_for_unlock_using_remembered_target_hides_manual_target_fie
 
     assert result["title"] == "EventLog - Lås upp"
     assert result["summary_text"] == "EventLog - Lås upp"
+    assert result["user_section_manager"] == "grid"
     assert result["submit_label"] == "Lås upp"
     assert result["mode_value"] == StartupDialogMode.UNLOCK.value
     assert result["target_source_manager"] == "grid"
@@ -536,6 +647,7 @@ def test_render_state_for_manual_unlock_shows_database_target_fields(run_tk_scen
 
     assert result["title"] == "EventLog - Öppna befintlig databas"
     assert result["summary_text"] == "EventLog - Öppna befintlig databas"
+    assert result["user_section_manager"] == "grid"
     assert result["mode_value"] == StartupDialogMode.UNLOCK.value
     assert result["target_source_manager"] == "grid"
     assert result["target_source_value"] is False
@@ -567,8 +679,9 @@ def test_get_submission_returns_current_field_values_and_blank_key_file_as_none(
 ) -> None:
     result = run_tk_scenario(_scenario_get_submission)
 
-    assert result["mode"] is StartupDialogMode.CREATE
+    assert result["mode"] is StartupDialogMode.UNLOCK
     assert result["dialect"] == "sqlite"
+    assert result["operator"] == "Sgt Example"
     assert result["uses_remembered_target"] is False
     assert result["field_values"] == {
         StartupFieldName.DATABASE_PATH: "C:/data/eventlog.db",
@@ -587,7 +700,10 @@ def test_callbacks_are_invoked_by_buttons_and_close_protocol(run_tk_scenario) ->
         "reset",
         "browse-database",
         "browse",
-        "database-path-changed",
+        "submission-changed",
+        "submission-changed",
+        "submission-changed",
+        "submission-changed",
         "cancel",
     ]
 
@@ -620,7 +736,7 @@ def test_render_state_without_selected_dialect_hides_backend_fields_and_keeps_fi
     assert result["password_policy_hint_text_with_sqlite"] == "Minst 8 tecken för nytt lösenord."
     assert result["key_file_manager_with_sqlite"] == "grid"
     assert result["size_without_dialect"] == result["size_with_sqlite"]
-    assert result["focus_without_dialect"] == "TCombobox"
+    assert result["focus_without_dialect"] == "TEntry"
 
 
 def test_render_state_preserves_visible_field_values_across_rerenders(run_tk_scenario) -> None:
@@ -631,6 +747,14 @@ def test_render_state_preserves_visible_field_values_across_rerenders(run_tk_sce
     assert result["create_password"] == "lösenord123"
     assert result["create_password_confirmation"] == "lösenord123"
     assert result["create_key_file_path"] == "C:/keys/startup.key"
+
+
+def test_render_state_syncs_hidden_database_path_across_rerenders(run_tk_scenario) -> None:
+    result = run_tk_scenario(_scenario_render_state_syncs_hidden_database_path_across_rerenders)
+
+    assert result["database_path_manager"] == ""
+    assert result["submission_database_path"] == "C:/remembered/remembered.db"
+    assert result["uses_remembered_target"] is True
 
 
 

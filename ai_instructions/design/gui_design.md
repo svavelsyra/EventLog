@@ -1,7 +1,7 @@
 # GUI Design (AI)
 
 **User Interface Layout & Interactions**  
-**Last Updated**: 2026-04-18 (Session 004 - Communication and Event Entry design complete)
+**Last Updated**: 2026-05-07 (Session 100 - Documented startup dialog interaction contract)
 
 ## Technology: Tkinter
 
@@ -45,6 +45,64 @@ Saved in database `user_preferences` table - loaded after database connection es
 - Config file stays minimal and focused on bootstrap
 
 **Implementation**: Create `user_preferences` table with key-value or structured storage for these settings.
+
+## Startup Dialog Interaction Design
+
+### Design Goal
+
+The startup dialog must support remembered-value prefill, manual override, backend-driven field visibility, and repeated presenter recomputation without turning the GUI seam into one getter/setter per field.
+
+### Primary Contract
+
+- The presenter sends a complete `StartupDialogState` to the view.
+- The view applies that state with `render_state(...)`.
+- The controller reads current operator-entered values through one `StartupDialogSubmission` from `get_submission(...)`.
+- The presenter uses that submission to compute the next state.
+
+### Required Startup Re-render Behavior
+
+The dialog must be safe to re-render multiple times during one startup attempt.
+
+Re-renders happen when the operator:
+- changes database technology,
+- switches between remembered target and manual target,
+- edits the selected database path,
+- retries after validation/authentication errors,
+- or returns to the dialog from a browse/reset-related flow.
+
+### Prefill and Mutation Rules
+
+- Remembered values and presenter-owned defaults should enter the UI through `StartupDialogState`, not through dedicated field-prefill setters.
+- Operator edits remain in the widget variables until the next presenter-owned state says otherwise.
+- The presenter is the authority for which startup fields are visible, required, editable, and grouped.
+- The view may derive Swedish labels and browse-button visibility from stable field identities, but it should not invent new startup-policy facts.
+
+### Structured Readback Rule
+
+Use `StartupDialogSubmission` as the normal readback shape for startup interaction.
+
+That submission should carry:
+- selected startup mode when relevant,
+- selected dialect,
+- operator name,
+- remembered/manual target choice,
+- and field values keyed by stable startup field names.
+
+Avoid adding dedicated read methods for individual startup fields unless the read has distinct UI meaning beyond ordinary form submission.
+
+### Anti-Pattern Guardrails
+
+Avoid these by default in the startup dialog design:
+- one getter or setter per visible field,
+- hidden booleans that duplicate `backend_fields` facts,
+- controller-managed field-by-field UI mutation,
+- callback proliferation where each new widget invites a new registration method.
+
+Preferred pattern:
+- render presenter state,
+- read one structured submission,
+- let the presenter recompute,
+- keep the controller thin.
 
 ## Main Window Layout
 

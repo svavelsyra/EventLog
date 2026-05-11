@@ -10,11 +10,14 @@ from typing import cast
 import pytest
 
 import src.app as app_module
-from src.config import DatabaseConfig, load_app_config
+from src.config import BootstrapUiConfig, DatabaseConfig, MainWindowConfig, load_app_config
+from src.config.app_config import BootstrapTargetConfig
+from src.core.app_runtime_state import AppRuntimeState
 from src.core import ResetFollowUpIssue
 from src.db.repositories.base_repository import BaseRepository
 from src.db.repositories.startup_selection import PathExists, StartupFieldKind, StartupFieldName, StartupFieldRequirement
 from src.db.repositories.startup_bootstrap import (
+    BackendCleanup,
     BackendCleanupError,
     BackendCleanupOutcome,
     BackendCleanupReport,
@@ -22,9 +25,9 @@ from src.db.repositories.startup_bootstrap import (
     BootstrapFailure,
     BootstrapFailureCode,
     BootstrapRepositoryResult,
+    MigrationResult,
 )
 from src.gui.presenters.startup_dialog_presenter import (
-    StartupDialogMigrationResult,
     StartupDialogMode,
     StartupDialogPresenter,
     StartupDialogState,
@@ -40,6 +43,7 @@ from src.gui.startup_dialog_controller import (
     TkRootProtocol,
     open_database_path_dialog,
 )
+from src.gui.views.startup_dialog_view import StartupDialogActionCallbacks
 from src.security import ResetFailureCategory, ResetOutcome
 
 
@@ -101,8 +105,10 @@ class FakeBooleanVar:
 class FakeView:
     def __init__(self, submission: StartupDialogSubmission) -> None:
         self.window = object()
+        self.mode_var = FakeStringVar(submission.mode.value)
         self.use_remembered_target_var = FakeBooleanVar(submission.uses_remembered_target)
         self.dialect_var = FakeStringVar(submission.dialect)
+        self.operator_value = submission.operator
         self.field_values = {
             StartupFieldName.DATABASE_PATH: submission.get_field_value(StartupFieldName.DATABASE_PATH),
             StartupFieldName.PASSWORD: submission.get_field_value(StartupFieldName.PASSWORD),
@@ -112,16 +118,8 @@ class FakeView:
             StartupFieldName.KEY_FILE_PATH: submission.get_field_value(StartupFieldName.KEY_FILE_PATH),
         }
         self.submission = submission
-        self.submit_callback = None
-        self.cancel_callback = None
-        self.migrate_callback = None
-        self.emergency_reset_callback = None
-        self.browse_database_callback = None
-        self.browse_key_file_callback = None
-        self.database_path_changed_callback = None
-        self.mode_changed_callback = None
-        self.target_source_changed_callback = None
-        self.dialect_changed_callback = None
+        self.action_callbacks = StartupDialogActionCallbacks()
+        self.submission_changed_callback: Callable[[], None] | None = None
         self.rendered_states = []
         self.error_messages: list[str] = []
         self.status_messages: list[str] = []
@@ -131,18 +129,24 @@ class FakeView:
         self.destroy_called = False
         self.submission_modes: list[StartupDialogMode] = []
         self.clear_sensitive_fields_args: list[bool] = []
+        self.set_field_value_calls: list[tuple[StartupFieldName, str]] = []
 
     def render_state(self, state) -> None:
         self.rendered_states.append(state)
+        self.mode_var.set(state.mode.value)
         self.use_remembered_target_var.set(state.uses_remembered_target)
         self.dialect_var.set(state.dialect)
+        self.operator_value = state.operator
         self.field_values[StartupFieldName.DATABASE_PATH] = state.database_path
+        self.field_values[StartupFieldName.KEY_FILE_PATH] = state.key_file_path
 
-    def get_submission(self, *, mode: StartupDialogMode) -> StartupDialogSubmission:
-        self.submission_modes.append(mode)
+    def get_submission(self) -> StartupDialogSubmission:
+        selected_mode = StartupDialogMode(self.mode_var.get())
+        self.submission_modes.append(selected_mode)
         return StartupDialogSubmission(
-            mode=mode,
+            mode=selected_mode,
             dialect=self.dialect_var.get(),
+            operator=self.operator_value,
             uses_remembered_target=self.use_remembered_target_var.get(),
             field_values={
                 field_name: self.get_field_value(field_name)
@@ -154,37 +158,55 @@ class FakeView:
         return self.field_values.get(field_name, "")
 
     def set_field_value(self, field_name: StartupFieldName, value: str) -> None:
+        self.set_field_value_calls.append((field_name, value))
         self.field_values[field_name] = value
 
-    def set_submit_callback(self, callback) -> None:
-        self.submit_callback = callback
+    def set_action_callbacks(self, callbacks: StartupDialogActionCallbacks) -> None:
+        self.action_callbacks = callbacks
 
-    def set_cancel_callback(self, callback) -> None:
-        self.cancel_callback = callback
+    def set_submission_changed_callback(self, callback: Callable[[], None]) -> None:
+        self.submission_changed_callback = callback
 
-    def set_migrate_callback(self, callback) -> None:
-        self.migrate_callback = callback
+    def select_mode(self, mode: StartupDialogMode) -> None:
+        self.mode_var.set(mode.value)
 
-    def set_emergency_reset_callback(self, callback) -> None:
-        self.emergency_reset_callback = callback
+    def select_dialect(self, dialect: str) -> None:
+        self.dialect_var.set(dialect)
 
-    def set_browse_database_callback(self, callback) -> None:
-        self.browse_database_callback = callback
+    def use_remembered_target(self) -> None:
+        self.use_remembered_target_var.set(True)
 
-    def set_browse_key_file_callback(self, callback) -> None:
-        self.browse_key_file_callback = callback
+    def use_manual_target(self) -> None:
+        self.use_remembered_target_var.set(False)
 
-    def set_database_path_changed_callback(self, callback) -> None:
-        self.database_path_changed_callback = callback
+    def set_operator(self, operator: str) -> None:
+        self.operator_value = operator
 
-    def set_mode_changed_callback(self, callback) -> None:
-        self.mode_changed_callback = callback
+    def invoke_submit(self) -> None:
+        self._invoke_callback(self.action_callbacks.submit, "submit")
 
-    def set_target_source_changed_callback(self, callback) -> None:
-        self.target_source_changed_callback = callback
+    def invoke_cancel(self) -> None:
+        self._invoke_callback(self.action_callbacks.cancel, "cancel")
 
-    def set_dialect_changed_callback(self, callback) -> None:
-        self.dialect_changed_callback = callback
+    def invoke_migrate(self) -> None:
+        self._invoke_callback(self.action_callbacks.migrate, "migrate")
+
+    def invoke_browse_database(self) -> None:
+        self._invoke_callback(self.action_callbacks.browse_database, "browse_database")
+
+    def invoke_browse_key_file(self) -> None:
+        self._invoke_callback(self.action_callbacks.browse_key_file, "browse_key_file")
+
+    def invoke_emergency_reset(self) -> None:
+        self._invoke_callback(self.action_callbacks.emergency_reset, "emergency_reset")
+
+    def invoke_submission_changed(self) -> None:
+        self._invoke_callback(self.submission_changed_callback, "submission_changed")
+
+    @staticmethod
+    def _invoke_callback(callback: Callable[[], None] | None, callback_name: str) -> None:
+        assert callback is not None, f"{callback_name} callback was not wired"
+        callback()
 
     def set_error_message(self, message: str) -> None:
         self.error_messages.append(message)
@@ -235,6 +257,9 @@ class FakeMainWindowFactory:
     def __init__(self) -> None:
         self.received_root: object | None = None
         self.received_startup_result: StartupDialogSuccess | None = None
+        self.received_app_runtime_state: AppRuntimeState | None = None
+        self.received_window_config: MainWindowConfig | None = None
+        self.received_template_callback: Callable[[], str | None] | None = None
         self.received_reset_callback: Callable[[], str | None] | None = None
         self.received_close_callback: Callable[[], str | None] | None = None
 
@@ -243,11 +268,17 @@ class FakeMainWindowFactory:
         root,
         startup_result: StartupDialogSuccess,
         *,
+        app_runtime_state: AppRuntimeState,
+        window_config: MainWindowConfig | None = None,
+        template_callback: Callable[[], str | None] | None = None,
         reset_callback: Callable[[], str | None] | None = None,
         close_callback: Callable[[], str | None] | None = None,
     ) -> object:
         self.received_root = root
         self.received_startup_result = startup_result
+        self.received_app_runtime_state = app_runtime_state
+        self.received_window_config = window_config
+        self.received_template_callback = template_callback
         self.received_reset_callback = reset_callback
         self.received_close_callback = close_callback
         return object()
@@ -264,6 +295,7 @@ def _make_submission(
     *,
     mode: StartupDialogMode,
     dialect: str = "sqlite",
+    operator: str = "",
     uses_remembered_target: bool = False,
     database_path: str = "eventlog.db",
     password: str = "",
@@ -273,6 +305,7 @@ def _make_submission(
     return StartupDialogSubmission(
         mode=mode,
         dialect=dialect,
+        operator=operator,
         uses_remembered_target=uses_remembered_target,
         field_values={
             StartupFieldName.DATABASE_PATH: database_path,
@@ -287,17 +320,31 @@ def _field_names(state) -> list[StartupFieldName]:
     return [field.field_name for field in state.backend_fields]
 
 
+class _DatabasePathDoesNotExist(PathExists):
+    def __call__(self, _path: str | PathLike[str]) -> bool:
+        return False
+
+
+class _PathExistsShouldNotBeCalled(PathExists):
+    def __call__(self, _path: str | PathLike[str]) -> bool:
+        raise AssertionError("controller should not perform startup mode inference")
+
+
+DATABASE_PATH_DOES_NOT_EXIST: PathExists = _DatabasePathDoesNotExist()
+PATH_EXISTS_SHOULD_NOT_BE_CALLED: PathExists = _PathExistsShouldNotBeCalled()
+
 
 def _make_presenter(
     database_config: DatabaseConfig,
     *,
     bootstrap_result: BootstrapRepositoryResult | None = None,
-    migration_result: object | None = None,
+    migration_result: MigrationResult | None = None,
     database_path_exists: PathExists | None = None,
 ) -> StartupDialogPresenter:
-    resolved_database_path_exists = (
-        _database_path_does_not_exist if database_path_exists is None else database_path_exists
-    )
+    if database_path_exists is None:
+        resolved_database_path_exists: PathExists = DATABASE_PATH_DOES_NOT_EXIST
+    else:
+        resolved_database_path_exists = database_path_exists
 
     def _startup_mode_resolver(
         dialect: str,
@@ -308,7 +355,7 @@ def _make_presenter(
             dialect,
             database_path,
             fallback_mode,
-            path_exists=cast(PathExists, resolved_database_path_exists),
+            path_exists=resolved_database_path_exists,
         )
 
     if bootstrap_result is None:
@@ -318,9 +365,9 @@ def _make_presenter(
                 startup_mode_resolver=_startup_mode_resolver,
             )
 
-        resolved_migration_result = migration_result
+        resolved_migration_result: MigrationResult = migration_result
 
-        def _migrate(_request):
+        def _migrate(_request) -> MigrationResult:
             return resolved_migration_result
 
         return StartupDialogPresenter(
@@ -330,19 +377,20 @@ def _make_presenter(
         )
 
     resolved_bootstrap_result = bootstrap_result
-    resolved_migration_result = migration_result
 
     def _bootstrap(_request) -> BootstrapRepositoryResult:
         return resolved_bootstrap_result
 
-    if resolved_migration_result is None:
+    if migration_result is None:
         return StartupDialogPresenter(
             database_config,
             bootstrap_callback=_bootstrap,
             startup_mode_resolver=_startup_mode_resolver,
         )
 
-    def _migrate(_request):
+    resolved_migration_result: MigrationResult = migration_result
+
+    def _migrate(_request) -> MigrationResult:
         return resolved_migration_result
 
     return StartupDialogPresenter(
@@ -351,29 +399,24 @@ def _make_presenter(
         migration_callback=_migrate,
         startup_mode_resolver=_startup_mode_resolver,
     )
-
-
-def _database_path_does_not_exist(_path: str | PathLike[str]) -> bool:
-    return False
-
-
-
 def _make_harness(
     *,
     database_config: DatabaseConfig,
     submission: StartupDialogSubmission,
     bootstrap_result: BootstrapRepositoryResult | None = None,
-    migration_result: object | None = None,
+    migration_result: MigrationResult | None = None,
     database_path_dialog_result: str = "",
     database_path_exists: PathExists | None = None,
     key_file_dialog_result: str = "",
-    emergency_reset_callback: Callable[[], object] | None = None,
+    emergency_reset_callback: EmergencyResetCallback | None = None,
+    last_operator_prefill: str = "",
 ) -> ControllerHarness:
     root = FakeRoot()
     view = FakeView(submission=submission)
-    resolved_database_path_exists = (
-        _database_path_does_not_exist if database_path_exists is None else database_path_exists
-    )
+    if database_path_exists is None:
+        resolved_database_path_exists: PathExists = DATABASE_PATH_DOES_NOT_EXIST
+    else:
+        resolved_database_path_exists = database_path_exists
     presenter = _make_presenter(
         database_config,
         bootstrap_result=bootstrap_result,
@@ -383,12 +426,13 @@ def _make_harness(
 
     controller = StartupDialogController(
         database_config,
+        last_operator_prefill=last_operator_prefill,
         presenter=presenter,
         view_factory=lambda _master: cast(StartupDialogViewProtocol, cast(object, view)),
         database_path_dialog_opener=lambda _parent: database_path_dialog_result,
         database_path_exists=resolved_database_path_exists,
         key_file_dialog_opener=lambda _parent: key_file_dialog_result,
-        emergency_reset_callback=emergency_reset_callback,  # type: ignore[arg-type]
+        emergency_reset_callback=emergency_reset_callback,
     )
     return ControllerHarness(root=root, view=view, controller=controller)
 
@@ -403,8 +447,10 @@ class SpyPresenter:
         self.initial_state = initial_state
         self.recomputed_state = recomputed_state
         self.recompute_calls: list[StartupDialogSubmission] = []
+        self.initial_operator_inputs: list[str] = []
 
-    def get_initial_state(self) -> StartupDialogState:
+    def get_initial_state(self, *, operator: str = "") -> StartupDialogState:
+        self.initial_operator_inputs.append(operator)
         return self.initial_state
 
     def recompute_state(
@@ -416,7 +462,6 @@ class SpyPresenter:
 
     def submit(self, submission: StartupDialogSubmission):
         raise AssertionError(f"submit should not be called in this test: {submission!r}")
-
 
 
 def test_run_renders_initial_create_state_and_focuses_primary_input() -> None:
@@ -441,15 +486,60 @@ def test_run_renders_initial_create_state_and_focuses_primary_input() -> None:
     assert harness.view.rendered_states[-1].title == "EventLog - Välj eller skapa databas"
     assert harness.view.clear_error_message_calls == 1
     assert harness.view.focus_calls == 1
-    assert harness.view.submit_callback is not None
-    assert harness.view.cancel_callback is not None
-    assert harness.view.migrate_callback is not None
-    assert harness.view.browse_database_callback is not None
-    assert harness.view.browse_key_file_callback is not None
-    assert harness.view.database_path_changed_callback is not None
-    assert harness.view.mode_changed_callback is None
-    assert harness.view.target_source_changed_callback is not None
-    assert harness.view.dialect_changed_callback is not None
+    assert harness.view.action_callbacks.submit is not None
+    assert harness.view.action_callbacks.cancel is not None
+    assert harness.view.action_callbacks.migrate is not None
+    assert harness.view.action_callbacks.browse_database is not None
+    assert harness.view.action_callbacks.browse_key_file is not None
+    assert harness.view.action_callbacks.emergency_reset is None
+    assert harness.view.submission_changed_callback is not None
+
+
+def test_run_prefills_operator_from_bootstrap_config() -> None:
+    harness = _make_harness(
+        database_config=DatabaseConfig(),
+        submission=_make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            database_path="eventlog.db",
+        ),
+        last_operator_prefill="Sgt Example",
+    )
+
+    harness.run()
+
+    assert harness.view.rendered_states[-1].operator == "Sgt Example"
+
+
+def test_run_passes_operator_prefill_into_presenter_owned_initial_state() -> None:
+    root = FakeRoot()
+    view = FakeView(
+        _make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="",
+            database_path="",
+        )
+    )
+    real_presenter = StartupDialogPresenter(DatabaseConfig())
+    spy_presenter = SpyPresenter(
+        initial_state=real_presenter.build_state(
+            mode=StartupDialogMode.CREATE,
+            dialect="",
+            operator="Sgt Example",
+        ),
+        recomputed_state=real_presenter.build_state(mode=StartupDialogMode.CREATE, dialect=""),
+    )
+    controller = StartupDialogController(
+        DatabaseConfig(),
+        last_operator_prefill="Sgt Example",
+        presenter=cast(StartupDialogPresenter, cast(object, spy_presenter)),
+        view_factory=lambda _master: cast(StartupDialogViewProtocol, cast(object, view)),
+    )
+
+    controller.run(root=root)
+
+    assert spy_presenter.initial_operator_inputs == ["Sgt Example"]
+    assert view.rendered_states[-1].operator == "Sgt Example"
 
 
 def test_run_with_caller_owned_root_uses_provided_root_without_destroying_it() -> None:
@@ -469,7 +559,7 @@ def test_run_with_caller_owned_root_uses_provided_root_without_destroying_it() -
         bootstrap_result=BootstrapRepositoryResult(repository=sentinel_repository),
         database_path_exists=lambda path: path == "eventlog.db",
     )
-    harness.root.on_wait_window = lambda: harness.view.submit_callback()
+    harness.root.on_wait_window = harness.view.invoke_submit
 
     result = harness.run()
 
@@ -498,9 +588,11 @@ def test_app_shell_keeps_root_alive_after_successful_startup_until_main_window_r
     def _startup_controller_factory(
         config: DatabaseConfig,
         *,
+        last_operator_prefill: str = "",
         emergency_reset_callback: EmergencyResetCallback | None = None,
     ) -> FakeStartupDialogRunner:
         captured["config"] = config
+        captured["last_operator_prefill"] = last_operator_prefill
         captured["emergency_reset_callback"] = emergency_reset_callback
         return runner
 
@@ -512,20 +604,27 @@ def test_app_shell_keeps_root_alive_after_successful_startup_until_main_window_r
         ),
         main_window_factory=cast(MainWindowFactory, cast(object, main_window_factory)),
     )
+    template_callback = lambda: "Skrev config.ini.template."
     reset_callback = lambda: None
     close_callback = lambda: None
+    window_config = MainWindowConfig(window_state="zoomed")
+    app_runtime_state = AppRuntimeState(active_operator="Sgt Example")
 
     result = shell.run_startup_dialog(database_config)
     assert result is sentinel_result
 
     shell.show_main_window(
         sentinel_result,
+        app_runtime_state=app_runtime_state,
+        window_config=window_config,
+        template_callback=template_callback,
         reset_callback=reset_callback,
         close_callback=close_callback,
     )
 
     assert captured == {
         "config": database_config,
+        "last_operator_prefill": "",
         "emergency_reset_callback": None,
     }
     assert root.withdraw_called is True
@@ -535,6 +634,9 @@ def test_app_shell_keeps_root_alive_after_successful_startup_until_main_window_r
     assert runner.received_root is root
     assert main_window_factory.received_root is root
     assert main_window_factory.received_startup_result is sentinel_result
+    assert main_window_factory.received_app_runtime_state is app_runtime_state
+    assert main_window_factory.received_window_config == window_config
+    assert main_window_factory.received_template_callback is template_callback
     assert main_window_factory.received_reset_callback is reset_callback
     assert main_window_factory.received_close_callback is close_callback
 
@@ -550,8 +652,10 @@ def test_app_shell_destroys_root_after_cancelled_startup() -> None:
     def _startup_controller_factory(
         _config: DatabaseConfig,
         *,
+        last_operator_prefill: str = "",
         emergency_reset_callback: EmergencyResetCallback | None = None,
     ) -> FakeStartupDialogRunner:
+        assert last_operator_prefill == ""
         assert emergency_reset_callback is None
         return runner
 
@@ -589,9 +693,11 @@ def test_app_shell_closes_root_and_reraises_when_startup_runner_fails() -> None:
     def _startup_controller_factory(
         config: DatabaseConfig,
         *,
+        last_operator_prefill: str = "",
         emergency_reset_callback: EmergencyResetCallback | None = None,
     ) -> FailingStartupDialogRunner:
         captured["config"] = config
+        captured["last_operator_prefill"] = last_operator_prefill
         captured["emergency_reset_callback"] = emergency_reset_callback
         return FailingStartupDialogRunner()
 
@@ -608,6 +714,7 @@ def test_app_shell_closes_root_and_reraises_when_startup_runner_fails() -> None:
 
     assert captured == {
         "config": database_config,
+        "last_operator_prefill": "",
         "emergency_reset_callback": None,
         "received_root": root,
     }
@@ -635,7 +742,10 @@ def test_app_shell_closes_root_and_reraises_when_mainloop_fails() -> None:
         root_factory=lambda: root,
         startup_controller_factory=cast(
             StartupControllerFactory,
-            cast(object, lambda _config, *, emergency_reset_callback=None: runner),
+            cast(
+                object,
+                lambda _config, *, last_operator_prefill="", emergency_reset_callback=None: runner,
+            ),
         ),
         main_window_factory=cast(MainWindowFactory, cast(object, main_window_factory)),
     )
@@ -645,7 +755,10 @@ def test_app_shell_closes_root_and_reraises_when_mainloop_fails() -> None:
     assert startup_result is sentinel_result
 
     with pytest.raises(RuntimeError, match="mainloop failed"):
-        shell.show_main_window(sentinel_result)
+        shell.show_main_window(
+            sentinel_result,
+            app_runtime_state=AppRuntimeState(),
+        )
 
     assert root.withdraw_called is True
     assert root.deiconify_called is True
@@ -654,9 +767,13 @@ def test_app_shell_closes_root_and_reraises_when_mainloop_fails() -> None:
     assert runner.received_root is root
     assert main_window_factory.received_root is root
     assert main_window_factory.received_startup_result is sentinel_result
+    assert isinstance(main_window_factory.received_app_runtime_state, AppRuntimeState)
 
     with pytest.raises(RuntimeError, match="App shell root is not available"):
-        shell.show_main_window(sentinel_result)
+        shell.show_main_window(
+            sentinel_result,
+            app_runtime_state=AppRuntimeState(),
+        )
 
 
 def test_dialect_selection_reveals_backend_fields_after_initial_blank_state() -> None:
@@ -673,8 +790,8 @@ def test_dialect_selection_reveals_backend_fields_after_initial_blank_state() ->
 
     def _select_sqlite() -> None:
         harness.view.set_field_value(StartupFieldName.DATABASE_PATH, "C:/Ops/eventlog.db")
-        harness.view.dialect_var.set("sqlite")
-        harness.view.dialect_changed_callback()
+        harness.view.select_dialect("sqlite")
+        harness.view.invoke_submission_changed()
 
     harness.root.on_wait_window = _select_sqlite
 
@@ -706,8 +823,8 @@ def test_dialect_selection_without_target_path_keeps_create_state_target_only() 
     )
 
     def _select_sqlite_without_path() -> None:
-        harness.view.dialect_var.set("sqlite")
-        harness.view.dialect_changed_callback()
+        harness.view.select_dialect("sqlite")
+        harness.view.invoke_submission_changed()
 
     harness.root.on_wait_window = _select_sqlite_without_path
 
@@ -741,7 +858,7 @@ def test_manual_database_path_entry_reveals_create_password_fields_without_brows
 
     def _type_database_path_manually() -> None:
         harness.view.set_field_value(StartupFieldName.DATABASE_PATH, "C:/Ops/new-eventlog.db")
-        harness.view.database_path_changed_callback()
+        harness.view.invoke_submission_changed()
 
     harness.root.on_wait_window = _type_database_path_manually
 
@@ -777,7 +894,7 @@ def test_run_falls_back_to_create_when_remembered_sqlite_target_no_longer_exists
             password="lösenord123",
             password_confirmation="lösenord123",
         ),
-        database_path_exists=lambda _path: False,
+        database_path_exists=DATABASE_PATH_DOES_NOT_EXIST,
     )
 
     harness.run()
@@ -826,8 +943,8 @@ def test_target_source_change_switches_unlock_view_to_manual_target_fields() -> 
     )
 
     def _switch_to_manual_target() -> None:
-        harness.view.use_remembered_target_var.set(False)
-        harness.view.target_source_changed_callback()
+        harness.view.use_manual_target()
+        harness.view.invoke_submission_changed()
 
     harness.root.on_wait_window = _switch_to_manual_target
 
@@ -860,8 +977,8 @@ def test_existing_database_selection_does_not_reuse_create_key_file_policy() -> 
     )
 
     def _select_existing_database() -> None:
-        harness.view.dialect_var.set("sqlite")
-        harness.view.browse_database_callback()
+        harness.view.select_dialect("sqlite")
+        harness.view.invoke_browse_database()
 
     harness.root.on_wait_window = _select_existing_database
 
@@ -896,7 +1013,7 @@ def test_new_database_selection_uses_create_policy_not_remembered_unlock_hint() 
     )
 
     def _select_new_database() -> None:
-        harness.view.browse_database_callback()
+        harness.view.invoke_browse_database()
 
     harness.root.on_wait_window = _select_new_database
 
@@ -906,7 +1023,6 @@ def test_new_database_selection_uses_create_policy_not_remembered_unlock_hint() 
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
     assert StartupFieldName.KEY_FILE_PATH in _field_names(harness.view.rendered_states[-1])
     assert harness.view.rendered_states[-1].backend_fields[-1].required is False
-
 
 
 def test_submit_failure_shows_error_and_clears_passwords_when_presenter_requests_retry_cleanup() -> None:
@@ -930,7 +1046,7 @@ def test_submit_failure_shows_error_and_clears_passwords_when_presenter_requests
         ),
         database_path_exists=lambda path: path == "eventlog.db",
     )
-    harness.root.on_wait_window = lambda: harness.view.submit_callback()
+    harness.root.on_wait_window = harness.view.invoke_submit
 
     result = harness.run()
 
@@ -964,7 +1080,7 @@ def test_submit_failure_shows_presenter_owned_migration_guidance_instead_of_back
         ),
         database_path_exists=lambda path: path == "eventlog.db",
     )
-    harness.root.on_wait_window = lambda: harness.view.submit_callback()
+    harness.root.on_wait_window = harness.view.invoke_submit
 
     result = harness.run()
 
@@ -998,7 +1114,7 @@ def test_submit_failure_with_migration_needed_exposes_dedicated_migrate_action()
         ),
         database_path_exists=lambda path: path == "eventlog.db",
     )
-    harness.root.on_wait_window = lambda: harness.view.submit_callback()
+    harness.root.on_wait_window = harness.view.invoke_submit
 
     result = harness.run()
 
@@ -1029,15 +1145,16 @@ def test_migrate_action_runs_presenter_migration_and_shows_success_status() -> N
                 retryable=False,
             )
         ),
-        migration_result=StartupDialogMigrationResult(
+        migration_result=MigrationResult(
+            migration_performed=True,
             message="Databasmigreringen slutfördes.",
         ),
         database_path_exists=lambda path: path == "eventlog.db",
     )
 
     def _submit_then_migrate() -> None:
-        harness.view.submit_callback()
-        harness.view.migrate_callback()
+        harness.view.invoke_submit()
+        harness.view.invoke_migrate()
 
     harness.root.on_wait_window = _submit_then_migrate
 
@@ -1048,7 +1165,6 @@ def test_migrate_action_runs_presenter_migration_and_shows_success_status() -> N
     assert harness.view.rendered_states[-1].show_migration_action is False
     assert harness.view.rendered_states[-1].submit_enabled is True
     assert harness.view.destroy_called is False
-
 
 
 def test_submit_success_closes_dialog_and_returns_startup_success() -> None:
@@ -1068,7 +1184,7 @@ def test_submit_success_closes_dialog_and_returns_startup_success() -> None:
         bootstrap_result=BootstrapRepositoryResult(repository=sentinel_repository),
         database_path_exists=lambda path: path == "eventlog.db",
     )
-    harness.root.on_wait_window = lambda: harness.view.submit_callback()
+    harness.root.on_wait_window = harness.view.invoke_submit
 
     result = harness.run()
 
@@ -1077,7 +1193,6 @@ def test_submit_success_closes_dialog_and_returns_startup_success() -> None:
     assert result.remembered_target.dialect == "sqlite"
     assert result.remembered_target.database_path == "eventlog.db"
     assert harness.view.destroy_called is True
-
 
 
 def test_cancel_closes_dialog_without_result() -> None:
@@ -1091,7 +1206,7 @@ def test_cancel_closes_dialog_without_result() -> None:
             password_confirmation="lösenord123",
         ),
     )
-    harness.root.on_wait_window = lambda: harness.view.cancel_callback()
+    harness.root.on_wait_window = harness.view.invoke_cancel
 
     result = harness.run()
 
@@ -1115,7 +1230,7 @@ def test_emergency_reset_success_closes_dialog_after_clearing_sensitive_fields()
         database_path_exists=lambda path: path == "eventlog.db",
         emergency_reset_callback=lambda: FakeEmergencyResetResult(success=True),
     )
-    harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
+    harness.root.on_wait_window = harness.view.invoke_emergency_reset
 
     result = harness.run()
 
@@ -1148,7 +1263,7 @@ def test_emergency_reset_failure_shows_sanitized_follow_up_message_and_keeps_dia
             ),
         ),
     )
-    harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
+    harness.root.on_wait_window = harness.view.invoke_emergency_reset
 
     result = harness.run()
 
@@ -1180,7 +1295,7 @@ def test_emergency_reset_failure_can_append_manual_key_file_advisory() -> None:
             manual_key_file_cleanup_advisory=True,
         ),
     )
-    harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
+    harness.root.on_wait_window = harness.view.invoke_emergency_reset
 
     result = harness.run()
 
@@ -1210,7 +1325,7 @@ def test_emergency_reset_success_does_not_show_manual_key_file_advisory_in_first
             manual_key_file_cleanup_advisory=True,
         ),
     )
-    harness.root.on_wait_window = lambda: harness.view.emergency_reset_callback()
+    harness.root.on_wait_window = harness.view.invoke_emergency_reset
 
     result = harness.run()
 
@@ -1219,23 +1334,35 @@ def test_emergency_reset_success_does_not_show_manual_key_file_advisory_in_first
     assert harness.view.destroy_called is True
 
 
-
-def test_browse_key_file_updates_view_path_when_file_is_selected() -> None:
+def test_browse_key_file_rerenders_presenter_owned_path_when_file_is_selected() -> None:
     harness = _make_harness(
         database_config=DatabaseConfig(),
         submission=_make_submission(
             mode=StartupDialogMode.CREATE,
             dialect="sqlite",
+            operator="Sgt Example",
             database_path="eventlog.db",
             password="lösenord123",
             password_confirmation="lösenord123",
         ),
         key_file_dialog_result="C:/keys/startup.key",
     )
-    harness.root.on_wait_window = lambda: harness.view.browse_key_file_callback()
+    def _set_operator_and_browse_key_file() -> None:
+        harness.view.set_operator("Sgt Example")
+        harness.view.set_field_value(StartupFieldName.DATABASE_PATH, "eventlog.db")
+        harness.view.invoke_browse_key_file()
+
+    harness.root.on_wait_window = _set_operator_and_browse_key_file
 
     harness.run()
 
+    assert (
+        StartupFieldName.KEY_FILE_PATH,
+        "C:/keys/startup.key",
+    ) not in harness.view.set_field_value_calls
+    assert harness.view.rendered_states[-1].operator == "Sgt Example"
+    assert harness.view.rendered_states[-1].database_path == "eventlog.db"
+    assert harness.view.rendered_states[-1].key_file_path == "C:/keys/startup.key"
     assert harness.view.get_field_value(StartupFieldName.KEY_FILE_PATH) == "C:/keys/startup.key"
 
 
@@ -1278,14 +1405,18 @@ def test_browse_database_switches_to_unlock_when_selected_database_exists() -> N
     )
 
     def _select_sqlite_and_browse_database() -> None:
-        harness.view.dialect_var.set("sqlite")
-        harness.view.browse_database_callback()
+        harness.view.select_dialect("sqlite")
+        harness.view.invoke_browse_database()
 
     harness.root.on_wait_window = _select_sqlite_and_browse_database
 
     harness.run()
 
     assert harness.view.get_field_value(StartupFieldName.DATABASE_PATH) == "C:/Ops/eventlog.db"
+    assert (
+        StartupFieldName.DATABASE_PATH,
+        "C:/Ops/eventlog.db",
+    ) not in harness.view.set_field_value_calls
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
     assert harness.view.rendered_states[-1].title == "EventLog - Öppna befintlig databas"
     assert StartupFieldName.PASSWORD_CONFIRMATION not in _field_names(harness.view.rendered_states[-1])
@@ -1308,11 +1439,15 @@ def test_browse_database_switches_to_create_when_selected_database_does_not_exis
         ),
         database_path_dialog_result="C:/Ops/new-eventlog.db",
     )
-    harness.root.on_wait_window = lambda: harness.view.browse_database_callback()
+    harness.root.on_wait_window = harness.view.invoke_browse_database
 
     harness.run()
 
     assert harness.view.get_field_value(StartupFieldName.DATABASE_PATH) == "C:/Ops/new-eventlog.db"
+    assert (
+        StartupFieldName.DATABASE_PATH,
+        "C:/Ops/new-eventlog.db",
+    ) not in harness.view.set_field_value_calls
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.CREATE
     assert harness.view.rendered_states[-1].title == "EventLog - Skapa krypterad databas"
     assert StartupFieldName.PASSWORD_CONFIRMATION in _field_names(harness.view.rendered_states[-1])
@@ -1324,6 +1459,7 @@ def test_database_path_rerender_preserves_other_visible_backend_field_values() -
         submission=_make_submission(
             mode=StartupDialogMode.CREATE,
             dialect="sqlite",
+            operator="Sgt Example",
             database_path="",
             password="lösenord123",
             password_confirmation="lösenord123",
@@ -1334,17 +1470,23 @@ def test_database_path_rerender_preserves_other_visible_backend_field_values() -
     )
 
     def _select_sqlite_and_browse_database() -> None:
-        harness.view.dialect_var.set("sqlite")
+        harness.view.select_dialect("sqlite")
+        harness.view.set_operator("Sgt Example")
         harness.view.set_field_value(StartupFieldName.PASSWORD, "lösenord123")
         harness.view.set_field_value(StartupFieldName.PASSWORD_CONFIRMATION, "lösenord123")
         harness.view.set_field_value(StartupFieldName.KEY_FILE_PATH, "C:/keys/startup.key")
-        harness.view.browse_database_callback()
+        harness.view.invoke_browse_database()
 
     harness.root.on_wait_window = _select_sqlite_and_browse_database
 
     harness.run()
 
     assert harness.view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
+    assert (
+        StartupFieldName.DATABASE_PATH,
+        "C:/Ops/eventlog.db",
+    ) not in harness.view.set_field_value_calls
+    assert harness.view.rendered_states[-1].operator == "Sgt Example"
     assert harness.view.get_field_value(StartupFieldName.PASSWORD) == "lösenord123"
     assert harness.view.get_field_value(StartupFieldName.KEY_FILE_PATH) == "C:/keys/startup.key"
 
@@ -1370,19 +1512,18 @@ def test_dialect_change_delegates_state_recomputation_to_presenter_instead_of_co
             use_remembered_target=False,
         ),
     )
+
     controller = StartupDialogController(
         DatabaseConfig(),
         presenter=cast(StartupDialogPresenter, cast(object, spy_presenter)),
         view_factory=lambda _master: cast(StartupDialogViewProtocol, cast(object, view)),
-        database_path_exists=lambda _path: (_ for _ in ()).throw(
-            AssertionError("controller should not perform startup mode inference")
-        ),
+        database_path_exists=PATH_EXISTS_SHOULD_NOT_BE_CALLED,
     )
 
     def _change_dialect() -> None:
-        view.dialect_var.set("sqlite")
+        view.select_dialect("sqlite")
         view.set_field_value(StartupFieldName.DATABASE_PATH, "C:/Ops/eventlog.db")
-        view.dialect_changed_callback()
+        view.invoke_submission_changed()
 
     root.on_wait_window = _change_dialect
 
@@ -1423,6 +1564,55 @@ def test_dialect_change_delegates_state_recomputation_to_presenter_instead_of_co
             editable=True,
         ),
     )
+
+
+def test_mode_change_reads_selected_mode_from_view_submission_and_rerenders() -> None:
+    root = FakeRoot()
+    view = FakeView(
+        _make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            database_path="C:/Ops/eventlog.db",
+            password="lösenord123",
+        )
+    )
+    real_presenter = StartupDialogPresenter(DatabaseConfig())
+    spy_presenter = SpyPresenter(
+        initial_state=real_presenter.build_state(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            database_path="C:/Ops/eventlog.db",
+        ),
+        recomputed_state=real_presenter.build_state(
+            mode=StartupDialogMode.UNLOCK,
+            dialect="sqlite",
+            database_path="C:/Ops/eventlog.db",
+            use_remembered_target=False,
+        ),
+    )
+    controller = StartupDialogController(
+        DatabaseConfig(),
+        presenter=cast(StartupDialogPresenter, cast(object, spy_presenter)),
+        view_factory=lambda _master: cast(StartupDialogViewProtocol, cast(object, view)),
+    )
+
+    def _change_mode() -> None:
+        view.select_mode(StartupDialogMode.UNLOCK)
+        view.invoke_submission_changed()
+
+    root.on_wait_window = _change_mode
+
+    controller.run(root=root)
+
+    assert spy_presenter.recompute_calls == [
+        _make_submission(
+            mode=StartupDialogMode.UNLOCK,
+            dialect="sqlite",
+            database_path="C:/Ops/eventlog.db",
+            password="lösenord123",
+        )
+    ]
+    assert view.rendered_states[-1].mode is StartupDialogMode.UNLOCK
 
 
 def test_resolve_database_config_returns_defaults_when_config_file_has_no_bootstrap_section(monkeypatch) -> None:
@@ -1500,14 +1690,26 @@ def test_run_active_context_reset_uses_startup_result_invalidator_before_cleanup
 def test_run_active_context_close_uses_startup_result_invalidator_without_backend_cleanup() -> None:
     phase_order: list[str] = []
 
+    def _backend_cleanup_not_expected() -> BackendCleanupOutcome:
+        phase_order.append("cleanup")
+        return BackendCleanupOutcome(
+            status=BackendCleanupStatus.COMPLETED,
+            cleanup_performed=True,
+        )
+
+    def _invalidate_access() -> None:
+        phase_order.append("deny")
+
+    remembered_target = DatabaseConfig(
+        dialect="sqlite",
+        database_path="C:/Ops/eventlog.db",
+    ).bootstrap_target
+
     startup_result = app_module.StartupDialogSuccess(
         repository=object(),
-        remembered_target=DatabaseConfig(
-            dialect="sqlite",
-            database_path="C:/Ops/eventlog.db",
-        ).bootstrap_target,
-        invalidate_access=lambda: phase_order.append("deny"),
-        backend_cleanup=lambda: phase_order.append("cleanup"),
+        remembered_target=remembered_target,
+        invalidate_access=_invalidate_access,
+        backend_cleanup=cast(BackendCleanup, _backend_cleanup_not_expected),
     )
 
     outcome = app_module.run_active_context_close(startup_result)
@@ -2134,6 +2336,17 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
         dialect="sqlite",
         database_path="eventlog.db",
     )
+    bootstrap_ui_config = BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state="zoomed",
+            window_width=1440,
+            window_height=900,
+            window_x=20,
+            window_y=30,
+        ),
+        language="sv",
+        last_operator="Sgt Example",
+    )
     runtime_database_config = DatabaseConfig(
         dialect="sqlite",
         database_path="C:/Ops/eventlog.db",
@@ -2143,7 +2356,9 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
         remembered_target=runtime_database_config.bootstrap_target,
     )
     captured: dict[str, object] = {}
-    persisted: dict[str, object] = {}
+    persisted_target: dict[str, object] = {}
+    persisted_ui: dict[str, object] = {}
+    persisted_template: dict[str, object] = {}
     shell_close_calls: list[str] = []
     reset_calls: list[tuple[StartupDialogSuccess, object]] = []
     close_calls: list[StartupDialogSuccess] = []
@@ -2156,9 +2371,11 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
             self,
             config: DatabaseConfig,
             *,
+            last_operator_prefill="",
             emergency_reset_callback=None,
         ):
             captured["config"] = config
+            captured["last_operator_prefill"] = last_operator_prefill
             captured["emergency_reset_callback"] = emergency_reset_callback
             captured["run_called"] = True
             return sentinel_result
@@ -2167,18 +2384,38 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
             self,
             startup_result: StartupDialogSuccess,
             *,
+            app_runtime_state: AppRuntimeState,
+            window_config=None,
+            template_callback=None,
             reset_callback=None,
             close_callback=None,
         ) -> None:
             captured["show_main_window_called"] = True
             captured["main_window_startup_result"] = startup_result
+            captured["app_runtime_state"] = app_runtime_state
+            captured["window_config"] = window_config
+            captured["template_callback"] = template_callback
             captured["reset_callback"] = reset_callback
             captured["close_callback"] = close_callback
 
         def close(self) -> None:
             shell_close_calls.append("close")
 
+        def snapshot_main_window_config(self):
+            return MainWindowConfig(
+                window_state="zoomed",
+                window_width=1600,
+                window_height=900,
+                window_x=0,
+                window_y=0,
+            )
+
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_bootstrap_ui_settings",
+        lambda _path: bootstrap_ui_config,
+    )
     monkeypatch.setattr(
         app_module,
         "resolve_runtime_database_config",
@@ -2213,37 +2450,80 @@ def test_run_app_loads_config_and_shows_main_window_after_successful_startup(mon
     monkeypatch.setattr(
         app_module,
         "save_bootstrap_target_config",
-        lambda config_path, target: persisted.update(
+        lambda config_path, target: persisted_target.update(
             {
                 "config_path": config_path,
                 "target": target,
             }
         ),
     )
+    monkeypatch.setattr(
+        app_module,
+        "save_bootstrap_ui_config",
+        lambda config_path, config: persisted_ui.update(
+            {
+                "config_path": config_path,
+                "config": config,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "write_config_template",
+        lambda template_path: persisted_template.update({"template_path": Path(template_path)})
+        or Path(template_path),
+    )
 
     result = app_module.run_app()
+    template_callback = cast(Callable[[], str | None], captured["template_callback"])
     reset_callback = cast(Callable[[], str | None], captured["reset_callback"])
     close_callback = cast(Callable[[], str | None], captured["close_callback"])
+    app_runtime_state = cast(AppRuntimeState, captured["app_runtime_state"])
 
     assert captured == {
         "shell": captured["shell"],
         "config": runtime_database_config,
+        "last_operator_prefill": "Sgt Example",
         "emergency_reset_callback": captured["emergency_reset_callback"],
         "run_called": True,
         "show_main_window_called": True,
         "main_window_startup_result": sentinel_result,
+        "app_runtime_state": app_runtime_state,
+        "window_config": bootstrap_ui_config.main_window,
+        "template_callback": captured["template_callback"],
         "reset_callback": captured["reset_callback"],
         "close_callback": captured["close_callback"],
     }
     assert callable(captured["emergency_reset_callback"])
+    assert callable(template_callback)
     assert callable(reset_callback)
     assert callable(close_callback)
-    assert persisted == {
+    assert app_runtime_state.active_operator == ""
+    assert persisted_target == {
         "config_path": app_module.DEFAULT_CONFIG_PATH,
         "target": runtime_database_config.bootstrap_target,
     }
+    assert template_callback() == "Skrev config.ini.template."
+    assert persisted_template == {
+        "template_path": app_module.DEFAULT_CONFIG_PATH.with_name("config.ini.template"),
+    }
     assert reset_callback() is None
+    app_runtime_state.active_operator = "Captain Runtime"
     assert close_callback() is None
+    assert persisted_ui == {
+        "config_path": app_module.DEFAULT_CONFIG_PATH,
+        "config": BootstrapUiConfig(
+            main_window=MainWindowConfig(
+                window_state="zoomed",
+                window_width=1600,
+                window_height=900,
+                window_x=0,
+                window_y=0,
+            ),
+            language="sv",
+            last_operator="Captain Runtime",
+        ),
+    }
     assert reset_calls == [(sentinel_result, app_module.DEFAULT_CONFIG_PATH)]
     assert close_calls == [sentinel_result]
     assert shell_close_calls == ["close", "close"]
@@ -2255,6 +2535,7 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
         dialect="sqlite",
         database_path="eventlog.db",
     )
+    bootstrap_ui_config = BootstrapUiConfig(last_operator="Sgt Example")
     runtime_database_config = DatabaseConfig(
         dialect="sqlite",
         database_path="C:/Ops/eventlog.db",
@@ -2266,9 +2547,11 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
             self,
             config: DatabaseConfig,
             *,
+            last_operator_prefill="",
             emergency_reset_callback=None,
         ):
             assert config == runtime_database_config
+            assert last_operator_prefill == "Sgt Example"
             assert callable(emergency_reset_callback)
             return None
 
@@ -2276,6 +2559,9 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
             self,
             startup_result: StartupDialogSuccess,
             *,
+            app_runtime_state: AppRuntimeState,
+            window_config=None,
+            template_callback=None,
             reset_callback=None,
             close_callback=None,
         ) -> None:
@@ -2285,6 +2571,11 @@ def test_run_app_does_not_persist_remembered_target_when_startup_is_cancelled(mo
             raise AssertionError("close should not be called for cancelled startup")
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_bootstrap_ui_settings",
+        lambda _path: bootstrap_ui_config,
+    )
     monkeypatch.setattr(
         app_module,
         "resolve_runtime_database_config",
@@ -2308,6 +2599,7 @@ def test_run_app_closes_shell_and_reraises_when_persisting_remembered_target_fai
         dialect="sqlite",
         database_path="eventlog.db",
     )
+    bootstrap_ui_config = BootstrapUiConfig(last_operator="Sgt Example")
     runtime_database_config = DatabaseConfig(
         dialect="sqlite",
         database_path="C:/Ops/eventlog.db",
@@ -2327,9 +2619,11 @@ def test_run_app_closes_shell_and_reraises_when_persisting_remembered_target_fai
             self,
             config: DatabaseConfig,
             *,
+            last_operator_prefill="",
             emergency_reset_callback=None,
         ):
             captured["config"] = config
+            captured["last_operator_prefill"] = last_operator_prefill
             captured["emergency_reset_callback"] = emergency_reset_callback
             captured["run_called"] = True
             return sentinel_result
@@ -2338,6 +2632,9 @@ def test_run_app_closes_shell_and_reraises_when_persisting_remembered_target_fai
             self,
             startup_result: StartupDialogSuccess,
             *,
+            app_runtime_state: AppRuntimeState,
+            window_config=None,
+            template_callback=None,
             reset_callback=None,
             close_callback=None,
         ) -> None:
@@ -2347,6 +2644,11 @@ def test_run_app_closes_shell_and_reraises_when_persisting_remembered_target_fai
             shell_close_calls.append("close")
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_bootstrap_ui_settings",
+        lambda _path: bootstrap_ui_config,
+    )
     monkeypatch.setattr(
         app_module,
         "resolve_runtime_database_config",
@@ -2367,6 +2669,7 @@ def test_run_app_closes_shell_and_reraises_when_persisting_remembered_target_fai
     assert captured == {
         "shell": captured["shell"],
         "config": runtime_database_config,
+        "last_operator_prefill": "Sgt Example",
         "emergency_reset_callback": captured["emergency_reset_callback"],
         "run_called": True,
         "persist_config_path": app_module.DEFAULT_CONFIG_PATH,
@@ -2381,6 +2684,7 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
         dialect="sqlite",
         database_path="eventlog.db",
     )
+    bootstrap_ui_config = BootstrapUiConfig()
     runtime_database_config = DatabaseConfig(dialect="", database_path="")
     captured: dict[str, object] = {}
 
@@ -2389,9 +2693,11 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
             self,
             config: DatabaseConfig,
             *,
+            last_operator_prefill="",
             emergency_reset_callback=None,
         ):
             captured["config"] = config
+            captured["last_operator_prefill"] = last_operator_prefill
             captured["emergency_reset_callback"] = emergency_reset_callback
             captured["run_called"] = True
             return None
@@ -2400,6 +2706,9 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
             self,
             startup_result: StartupDialogSuccess,
             *,
+            app_runtime_state: AppRuntimeState,
+            window_config=None,
+            template_callback=None,
             reset_callback=None,
             close_callback=None,
         ) -> None:
@@ -2409,6 +2718,11 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
             raise AssertionError("close should not be called when startup is cancelled")
 
     monkeypatch.setattr(app_module, "load_database_config", lambda _path: database_config)
+    monkeypatch.setattr(
+        app_module,
+        "resolve_bootstrap_ui_settings",
+        lambda _path: bootstrap_ui_config,
+    )
     monkeypatch.setattr(
         app_module,
         "resolve_runtime_database_config",
@@ -2421,8 +2735,74 @@ def test_run_app_does_not_wire_startup_reset_callback_without_remembered_target(
     assert result is None
     assert captured == {
         "config": runtime_database_config,
+        "last_operator_prefill": "",
         "emergency_reset_callback": None,
         "run_called": True,
     }
+
+
+def test_main_window_close_callback_persists_blank_last_operator_from_runtime_context(monkeypatch) -> None:
+    startup_result = StartupDialogSuccess(
+        repository=object(),
+        remembered_target=BootstrapTargetConfig(dialect="sqlite", database_path="eventlog.db"),
+        last_operator="Sgt Example",
+    )
+    bootstrap_ui_config = BootstrapUiConfig(
+        main_window=MainWindowConfig(window_state="normal", window_width=1200, window_height=700),
+        language="sv",
+        last_operator="Earlier Operator",
+    )
+    persisted_ui: dict[str, object] = {}
+    close_calls: list[StartupDialogSuccess] = []
+    shell_close_calls: list[str] = []
+
+    class FakeAppShell:
+        def snapshot_main_window_config(self):
+            return None
+
+        def close(self) -> None:
+            shell_close_calls.append("close")
+
+    monkeypatch.setattr(
+        app_module,
+        "run_active_context_close",
+        lambda received_startup_result: close_calls.append(received_startup_result)
+        or ResetOutcome(
+            had_active_context=True,
+            denial_succeeded=True,
+            cleanup_started=False,
+            cleanup_completed=False,
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "save_bootstrap_ui_config",
+        lambda config_path, config: persisted_ui.update(
+            {
+                "config_path": config_path,
+                "config": config,
+            }
+        ),
+    )
+
+    callback = app_module._build_main_window_close_callback(
+        cast(app_module.AppShell, cast(object, FakeAppShell())),
+        startup_result,
+        config_path=app_module.DEFAULT_CONFIG_PATH,
+        bootstrap_ui_config=bootstrap_ui_config,
+        app_runtime_state=AppRuntimeState(),
+    )
+
+    assert callback() is None
+    assert persisted_ui == {
+        "config_path": app_module.DEFAULT_CONFIG_PATH,
+        "config": BootstrapUiConfig(
+            main_window=bootstrap_ui_config.main_window,
+            language="sv",
+            last_operator="",
+        ),
+    }
+    assert close_calls == [startup_result]
+    assert shell_close_calls == ["close"]
 
 

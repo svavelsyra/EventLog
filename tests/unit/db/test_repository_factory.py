@@ -1,13 +1,19 @@
 from configparser import ConfigParser
 from dataclasses import replace
 from pathlib import Path
+from os import PathLike
+from typing import cast
 
 import pytest
 
 from src.config import (
+    BootstrapUiConfig,
     DatabaseConfig,
+    MainWindowConfig,
     load_app_config,
+    load_bootstrap_ui_config,
     load_database_config,
+    parse_bootstrap_ui_config,
     parse_database_config,
 )
 from src.config.app_config import BootstrapTargetConfig, DatabaseCreationDefaults
@@ -17,6 +23,7 @@ from src.db.repositories import repository_factory as repository_factory_module
 from src.db.database_adapter import BackendCleanupMetadata, WrongDatabaseAdapter
 from src.db.repositories.base_repository import BaseRepository
 from src.db.repositories.bootstrap_backend_policy import (
+    CleanupMetadataResolver,
     get_remembered_target_cleanup_metadata,
     is_supported_repository_dialect,
     supports_external_key_file_advisory,
@@ -35,6 +42,7 @@ EXPECTED_TABLES = {
     "event_entries",
     "personnel_entries",
     "settings",
+    "user_preferences",
 }
 
 
@@ -128,7 +136,9 @@ def test_get_remembered_target_cleanup_metadata_dispatches_through_factory_backe
     captured: dict[str, object] = {}
     sentinel_metadata = BackendCleanupMetadata()
 
-    def fake_sqlite_remembered_target_cleanup_metadata(database_path: str) -> BackendCleanupMetadata:
+    def fake_sqlite_remembered_target_cleanup_metadata(
+        database_path: str | PathLike[str],
+    ) -> BackendCleanupMetadata:
         captured["database_path"] = database_path
         return sentinel_metadata
 
@@ -137,7 +147,10 @@ def test_get_remembered_target_cleanup_metadata_dispatches_through_factory_backe
         backend_policy_module.SQLITE_DIALECT,
         replace(
             backend_policy_module._BACKEND_POLICIES[backend_policy_module.SQLITE_DIALECT],
-            cleanup_metadata_resolver=fake_sqlite_remembered_target_cleanup_metadata,
+            cleanup_metadata_resolver=cast(
+                CleanupMetadataResolver,
+                fake_sqlite_remembered_target_cleanup_metadata,
+            ),
         ),
     )
 
@@ -723,6 +736,89 @@ def test_load_database_config_returns_none_for_missing_file(tmp_path: Path) -> N
     missing_path = tmp_path / "missing.ini"
 
     assert load_database_config(missing_path) is None
+
+
+def test_load_bootstrap_ui_config_returns_code_defaults_for_missing_file(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.ini"
+
+    assert load_bootstrap_ui_config(missing_path) == BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state="normal",
+            window_width=1200,
+            window_height=700,
+            window_x=100,
+            window_y=100,
+        ),
+        language="sv",
+        last_operator="",
+    )
+
+
+def test_load_bootstrap_ui_config_reads_application_and_user_sections(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        """
+[Application]
+window_state = zoomed
+window_width = 1366
+window_height = 768
+window_x = 15
+window_y = 25
+language = EN
+
+[User]
+last_operator = Sgt Example
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    assert load_bootstrap_ui_config(config_path) == BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state="zoomed",
+            window_width=1366,
+            window_height=768,
+            window_x=15,
+            window_y=25,
+        ),
+        language="en",
+        last_operator="Sgt Example",
+    )
+
+
+def test_parse_bootstrap_ui_config_logs_malformed_values_and_uses_defaults(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    parser = ConfigParser()
+    parser["Application"] = {
+        "window_state": "fullscreen",
+        "window_width": "wide",
+        "window_height": "0",
+        "window_x": "left",
+        "window_y": "200",
+        "language": "   ",
+    }
+    parser["User"] = {
+        "last_operator": "  Sgt Example  ",
+    }
+
+    with caplog.at_level("WARNING"):
+        config = parse_bootstrap_ui_config(parser)
+
+    assert config == BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state="normal",
+            window_width=1200,
+            window_height=700,
+            window_x=100,
+            window_y=200,
+        ),
+        language="sv",
+        last_operator="Sgt Example",
+    )
+    assert "Application.window_state" in caplog.text
+    assert "Application.window_width" in caplog.text
+    assert "Application.window_height" in caplog.text
+    assert "Application.window_x" in caplog.text
 
 
 

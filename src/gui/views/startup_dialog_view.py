@@ -40,6 +40,18 @@ class _StartupFieldWidgets:
     browse_button: ttk.Button | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class StartupDialogActionCallbacks:
+    """Action-oriented callbacks used by the startup dialog."""
+
+    submit: VoidCallback | None = None
+    cancel: VoidCallback | None = None
+    migrate: VoidCallback | None = None
+    emergency_reset: VoidCallback | None = None
+    browse_database: VoidCallback | None = None
+    browse_key_file: VoidCallback | None = None
+
+
 class StartupDialogView:
     """Render the startup dialog and expose user-entered values."""
 
@@ -53,22 +65,15 @@ class StartupDialogView:
         self.window.resizable(False, False)
         self.window.minsize(640, 360)
 
-        self._submit_callback: VoidCallback | None = None
-        self._cancel_callback: VoidCallback | None = None
-        self._migrate_callback: VoidCallback | None = None
-        self._emergency_reset_callback: VoidCallback | None = None
-        self._browse_database_callback: VoidCallback | None = None
-        self._browse_key_file_callback: VoidCallback | None = None
-        self._database_path_changed_callback: VoidCallback | None = None
-        self._mode_changed_callback: VoidCallback | None = None
-        self._target_source_changed_callback: VoidCallback | None = None
-        self._dialect_changed_callback: VoidCallback | None = None
+        self._action_callbacks = StartupDialogActionCallbacks()
+        self._submission_changed_callback: VoidCallback | None = None
         self._field_widgets: dict[StartupFieldName, _StartupFieldWidgets] = {}
         self._visible_field_names: tuple[StartupFieldName, ...] = ()
 
         self.mode_var = tk.StringVar(master=self.window, value=StartupDialogMode.CREATE.value)
         self.use_remembered_target_var = tk.BooleanVar(master=self.window, value=False)
         self.dialect_var = tk.StringVar(master=self.window)
+        self.operator_var = tk.StringVar(master=self.window)
         self.status_message_var = tk.StringVar(master=self.window)
         self.error_message_var = tk.StringVar(master=self.window)
 
@@ -86,12 +91,20 @@ class StartupDialogView:
         )
         self.summary_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
+        self.user_section = ttk.LabelFrame(self.container, text="Användare", padding=12)
+        self.user_section.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        self.user_section.columnconfigure(1, weight=1)
+        self.operator_label = ttk.Label(self.user_section, text="Operatör:", width=18)
+        self.operator_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        self.operator_entry = ttk.Entry(self.user_section, textvariable=self.operator_var)
+        self.operator_entry.grid(row=0, column=1, sticky=tk.EW)
+
         self.database_section = ttk.LabelFrame(self.container, text="Databas", padding=12)
-        self.database_section.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        self.database_section.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
         self.database_section.columnconfigure(0, weight=1)
 
         self.access_section = ttk.LabelFrame(self.container, text="Åtkomst", padding=12)
-        self.access_section.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
+        self.access_section.grid(row=3, column=0, sticky=tk.EW, pady=(0, 8))
         self.access_section.columnconfigure(0, weight=1)
 
         self.mode_row = ttk.LabelFrame(self.database_section, text="Startläge", padding=8)
@@ -101,7 +114,7 @@ class StartupDialogView:
             text="Skapa ny databas",
             value=StartupDialogMode.CREATE.value,
             variable=self.mode_var,
-            command=self._handle_mode_changed,
+            command=self._notify_submission_changed,
         )
         self.create_mode_button.grid(row=0, column=0, sticky=tk.W, padx=(0, 12))
         self.unlock_mode_button = ttk.Radiobutton(
@@ -109,7 +122,7 @@ class StartupDialogView:
             text="Öppna befintlig databas",
             value=StartupDialogMode.UNLOCK.value,
             variable=self.mode_var,
-            command=self._handle_mode_changed,
+            command=self._notify_submission_changed,
         )
         self.unlock_mode_button.grid(row=0, column=1, sticky=tk.W)
         self.mode_row.grid_remove()
@@ -122,7 +135,7 @@ class StartupDialogView:
             text="Använd senast ihågkommen databas",
             value=True,
             variable=self.use_remembered_target_var,
-            command=self._handle_target_source_changed,
+            command=self._notify_submission_changed,
         )
         self.use_remembered_target_button.grid(row=0, column=0, sticky=tk.W, pady=(0, 4))
         self.use_manual_target_button = ttk.Radiobutton(
@@ -130,7 +143,7 @@ class StartupDialogView:
             text="Välj eller ange databas manuellt",
             value=False,
             variable=self.use_remembered_target_var,
-            command=self._handle_target_source_changed,
+            command=self._notify_submission_changed,
         )
         self.use_manual_target_button.grid(row=1, column=0, sticky=tk.W)
 
@@ -146,7 +159,7 @@ class StartupDialogView:
             state="readonly",
         )
         self.dialect_combobox.grid(row=0, column=1, sticky=tk.EW)
-        self.dialect_combobox.bind("<<ComboboxSelected>>", self._handle_dialect_changed)
+        self.dialect_combobox.bind("<<ComboboxSelected>>", self._notify_submission_changed)
 
         self.database_fields_container = ttk.Frame(self.database_section)
         self.database_fields_container.grid(row=3, column=0, sticky=tk.EW)
@@ -169,21 +182,21 @@ class StartupDialogView:
             textvariable=self.error_message_var,
             foreground="#b00020",
         )
-        self.error_label.grid(row=3, column=0, sticky=tk.W, pady=(0, 8))
+        self.error_label.grid(row=4, column=0, sticky=tk.W, pady=(0, 8))
 
         self.status_label = ttk.Label(
             self.container,
             textvariable=self.status_message_var,
             foreground="#1b5e20",
         )
-        self.status_label.grid(row=4, column=0, sticky=tk.W, pady=(0, 8))
+        self.status_label.grid(row=5, column=0, sticky=tk.W, pady=(0, 8))
         self.status_label.grid_remove()
 
         self.button_separator = ttk.Separator(self.container, orient="horizontal")
-        self.button_separator.grid(row=5, column=0, sticky=tk.EW, pady=(4, 10))
+        self.button_separator.grid(row=6, column=0, sticky=tk.EW, pady=(4, 10))
 
         self.button_row = ttk.Frame(self.container)
-        self.button_row.grid(row=6, column=0, sticky=tk.EW)
+        self.button_row.grid(row=7, column=0, sticky=tk.EW)
         self.button_row.columnconfigure(1, weight=1)
         self.danger_action_frame = ttk.Frame(self.button_row, padding=(0, 2, 0, 0))
         self.danger_action_frame.grid(row=0, column=0, sticky=tk.W)
@@ -238,8 +251,10 @@ class StartupDialogView:
         self.mode_var.set(state.mode.value)
         self.use_remembered_target_var.set(state.uses_remembered_target)
         self.dialect_var.set(state.dialect)
-        if self.get_field_value(StartupFieldName.DATABASE_PATH) != state.database_path:
-            self.set_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
+        if self.operator_var.get() != state.operator:
+            self.operator_var.set(state.operator)
+        self._sync_state_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
+        self._sync_state_field_value(StartupFieldName.KEY_FILE_PATH, state.key_file_path)
         self.password_policy_hint_label.configure(text=state.password_policy_hint)
         self._set_modes(state.available_modes)
 
@@ -263,10 +278,6 @@ class StartupDialogView:
                 widgets.browse_button.configure(
                     state="normal" if requirement.editable else "disabled"
                 )
-
-            if requirement.field_name is StartupFieldName.DATABASE_PATH:
-                if self.get_field_value(StartupFieldName.DATABASE_PATH) != state.database_path:
-                    self.set_field_value(StartupFieldName.DATABASE_PATH, state.database_path)
 
             visible_field_names.append(requirement.field_name)
             if self._field_belongs_in_database_section(requirement.field_name):
@@ -302,11 +313,12 @@ class StartupDialogView:
         )
         self._set_row_visibility(self.migrate_button, visible=state.show_migration_action)
 
-    def get_submission(self, *, mode: StartupDialogMode) -> StartupDialogSubmission:
+    def get_submission(self) -> StartupDialogSubmission:
         """Return the current dialog values as a presenter submission."""
         return StartupDialogSubmission(
-            mode=mode,
+            mode=StartupDialogMode(self.mode_var.get()),
             dialect=self.dialect_var.get(),
+            operator=self.operator_var.get(),
             uses_remembered_target=self.use_remembered_target_var.get(),
             field_values={
                 field_name: self.get_field_value(field_name)
@@ -322,45 +334,18 @@ class StartupDialogView:
         """Store a text value for one backend-driven field."""
         self._ensure_field_widgets(field_name).variable.set(value)
 
-    def set_submit_callback(self, callback: VoidCallback) -> None:
-        """Register the submit action callback."""
-        self._submit_callback = callback
+    def _sync_state_field_value(self, field_name: StartupFieldName, value: str) -> None:
+        if self.get_field_value(field_name) != value:
+            self.set_field_value(field_name, value)
 
-    def set_cancel_callback(self, callback: VoidCallback) -> None:
-        """Register the cancel/close action callback."""
-        self._cancel_callback = callback
+    def set_action_callbacks(self, callbacks: StartupDialogActionCallbacks) -> None:
+        """Register action-oriented UI callbacks."""
+        self._action_callbacks = callbacks
 
-    def set_migrate_callback(self, callback: VoidCallback) -> None:
-        """Register the migrate action callback."""
-        self._migrate_callback = callback
 
-    def set_emergency_reset_callback(self, callback: VoidCallback) -> None:
-        """Register the emergency-reset action callback."""
-        self._emergency_reset_callback = callback
-
-    def set_browse_database_callback(self, callback: VoidCallback) -> None:
-        """Register the browse-database action callback."""
-        self._browse_database_callback = callback
-
-    def set_browse_key_file_callback(self, callback: VoidCallback) -> None:
-        """Register the browse-key-file action callback."""
-        self._browse_key_file_callback = callback
-
-    def set_database_path_changed_callback(self, callback: VoidCallback) -> None:
-        """Register the manual database-path edit callback."""
-        self._database_path_changed_callback = callback
-
-    def set_mode_changed_callback(self, callback: VoidCallback) -> None:
-        """Register the mode-selector change callback."""
-        self._mode_changed_callback = callback
-
-    def set_target_source_changed_callback(self, callback: VoidCallback) -> None:
-        """Register the target-source-selector change callback."""
-        self._target_source_changed_callback = callback
-
-    def set_dialect_changed_callback(self, callback: VoidCallback) -> None:
-        """Register the technology-selector change callback."""
-        self._dialect_changed_callback = callback
+    def set_submission_changed_callback(self, callback: VoidCallback) -> None:
+        """Register callback for submission-changing UI events."""
+        self._submission_changed_callback = callback
 
     def set_error_message(self, message: str) -> None:
         """Show a presenter-provided error message in the dialog."""
@@ -388,6 +373,10 @@ class StartupDialogView:
 
     def focus_primary_input(self) -> None:
         """Focus the most relevant primary input for the current dialog state."""
+        if not self.operator_var.get().strip():
+            self.operator_entry.focus_set()
+            return
+
         if self.dialect_row.winfo_manager() and not self.dialect_var.get().strip():
             self.dialect_combobox.focus_set()
             return
@@ -416,44 +405,32 @@ class StartupDialogView:
         self._handle_cancel()
 
     def _handle_submit(self) -> None:
-        if self._submit_callback is not None:
-            self._submit_callback()
+        if self._action_callbacks.submit is not None:
+            self._action_callbacks.submit()
 
     def _handle_cancel(self) -> None:
-        if self._cancel_callback is not None:
-            self._cancel_callback()
+        if self._action_callbacks.cancel is not None:
+            self._action_callbacks.cancel()
 
     def _handle_migrate(self) -> None:
-        if self._migrate_callback is not None:
-            self._migrate_callback()
+        if self._action_callbacks.migrate is not None:
+            self._action_callbacks.migrate()
 
     def _handle_emergency_reset(self) -> None:
-        if self._emergency_reset_callback is not None:
-            self._emergency_reset_callback()
+        if self._action_callbacks.emergency_reset is not None:
+            self._action_callbacks.emergency_reset()
 
     def _handle_browse_database(self) -> None:
-        if self._browse_database_callback is not None:
-            self._browse_database_callback()
+        if self._action_callbacks.browse_database is not None:
+            self._action_callbacks.browse_database()
 
     def _handle_browse_key_file(self) -> None:
-        if self._browse_key_file_callback is not None:
-            self._browse_key_file_callback()
+        if self._action_callbacks.browse_key_file is not None:
+            self._action_callbacks.browse_key_file()
 
-    def _handle_database_path_changed(self, _event: object | None = None) -> None:
-        if self._database_path_changed_callback is not None:
-            self._database_path_changed_callback()
-
-    def _handle_mode_changed(self) -> None:
-        if self._mode_changed_callback is not None:
-            self._mode_changed_callback()
-
-    def _handle_target_source_changed(self) -> None:
-        if self._target_source_changed_callback is not None:
-            self._target_source_changed_callback()
-
-    def _handle_dialect_changed(self, _event: object | None = None) -> None:
-        if self._dialect_changed_callback is not None:
-            self._dialect_changed_callback()
+    def _notify_submission_changed(self, _event: object | None = None) -> None:
+        if self._submission_changed_callback is not None:
+            self._submission_changed_callback()
 
     def _set_modes(self, available_modes: Sequence[StartupDialogMode]) -> None:
         create_enabled = StartupDialogMode.CREATE in available_modes
@@ -484,7 +461,7 @@ class StartupDialogView:
         )
         entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 6))
         if field_name is StartupFieldName.DATABASE_PATH:
-            entry.bind("<KeyRelease>", self._handle_database_path_changed)
+            entry.bind("<KeyRelease>", self._notify_submission_changed)
 
         browse_button: ttk.Button | None = None
         if field_name in {StartupFieldName.DATABASE_PATH, StartupFieldName.KEY_FILE_PATH}:
@@ -569,6 +546,7 @@ class StartupDialogView:
 
 
 __all__ = [
+    "StartupDialogActionCallbacks",
     "StartupDialogView",
     "VoidCallback",
 ]

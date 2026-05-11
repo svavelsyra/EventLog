@@ -75,11 +75,15 @@ date_format = %%Y-%%m-%%d %%H:%%M:%%S
 [Application]
 # Application window settings (managed by app, modify with caution)
 window_state = normal
-window_width = 1024
-window_height = 768
+window_width = 1200
+window_height = 700
 window_x = 100
 window_y = 100
 
 # Language (sv = Swedish, en = English)
 language = sv
 
+[User]
+# Bootstrap-only user convenience values.
+# This section must never contain secrets; it only helps prefill startup UI.
+last_operator =

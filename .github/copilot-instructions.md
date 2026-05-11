@@ -63,6 +63,14 @@
 - Do **not** use node selectors like `::TestClass::test_name` or filters like `-k` unless the user explicitly asks.
 - Reuse the exact approved command shapes above rather than creating variants with reordered files or extra options.
 
+## Approved Git Command Policy
+- Prefer a very small, stable read-only Git command family to reduce approval prompts.
+- Default repository-state command: `Set-Location <project-root>; git --no-pager status`
+- Default working-tree review command: `Set-Location <project-root>; git --no-pager diff`
+- Allowed recent-history command: `Set-Location <project-root>; git --no-pager log --oneline -5`
+- Do **not** invent extra Git flags, file/path-limited Git commands, or alternative inspection variants during normal work unless the user explicitly asks.
+- Treat anything outside those exact command shapes as ask-first territory unless the user directly requested it.
+
 ## Tech Stack
 - Python 3.14 (stdlib only for app, zero third-party dependencies)
 - Tkinter (GUI)

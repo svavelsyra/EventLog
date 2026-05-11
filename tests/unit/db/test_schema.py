@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "event_entries",
     "personnel_entries",
     "settings",
+    "user_preferences",
 }
 
 EXPECTED_INDEXES = {
@@ -104,6 +105,7 @@ def test_execute_schema_file_is_idempotent(connection: sqlite3.Connection) -> No
     assert _get_schema_object_names(connection, "table") == EXPECTED_TABLES
     assert _get_schema_object_names(connection, "index") == EXPECTED_INDEXES
     assert _get_table_row_count(connection, "settings") == 1
+    assert _get_table_row_count(connection, "user_preferences") == 0
     assert _get_table_row_count(connection, "communication_systems") == 4
     assert _get_table_row_count(connection, "communication_options") == 18
     assert _get_table_row_count(connection, "communication_qualifiers_config") == 5

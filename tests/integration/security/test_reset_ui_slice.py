@@ -8,7 +8,8 @@ from typing import cast
 import pytest
 
 import src.app as app_module
-from src.config import DatabaseConfig, load_app_config
+from src.config import BootstrapUiConfig, DatabaseConfig, MainWindowConfig, load_app_config, load_bootstrap_ui_config
+from src.core.app_runtime_state import AppRuntimeState
 from src.db.repositories.startup_bootstrap import (
     BackendCleanupConcern,
     BackendCleanupError,
@@ -211,11 +212,15 @@ def _scenario_startup_emergency_reset(
 
 
 class _ShellSpy:
-    def __init__(self) -> None:
+    def __init__(self, *, snapshot_config: MainWindowConfig | None = None) -> None:
         self.close_called = False
+        self.snapshot_config = snapshot_config
 
     def close(self) -> None:
         self.close_called = True
+
+    def snapshot_main_window_config(self) -> MainWindowConfig | None:
+        return self.snapshot_config
 
 
 def _scenario_main_window_reset(
@@ -286,7 +291,11 @@ def _scenario_main_window_reset(
         startup_result,
         config_path=config_path,
     )
-    view = MainWindowShellView(root, reset_callback=callback)
+    view = MainWindowShellView(
+        root,
+        app_runtime_state=AppRuntimeState(),
+        reset_callback=callback,
+    )
     database_exists_before_reset = Path(database_config.database_path).exists()
 
     try:
@@ -306,10 +315,37 @@ def _scenario_main_window_close(
     root: tk.Tk,
     *,
     database_config: DatabaseConfig,
+    config_path: Path,
     missing_invalidator: bool,
+    runtime_operator: str,
 ) -> dict[str, object]:
     startup_result = _build_active_startup_result(database_config)
     repository = cast(EventLogRepository, startup_result.repository)
+    startup_result = StartupDialogSuccess(
+        repository=startup_result.repository,
+        remembered_target=startup_result.remembered_target,
+        invalidate_access=startup_result.invalidate_access,
+        backend_cleanup=startup_result.backend_cleanup,
+        last_operator="Sgt Example",
+    )
+    snapshot_config = MainWindowConfig(
+        window_state="zoomed",
+        window_width=1440,
+        window_height=900,
+        window_x=25,
+        window_y=35,
+    )
+    bootstrap_ui_config = BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state="normal",
+            window_width=1200,
+            window_height=700,
+            window_x=100,
+            window_y=100,
+        ),
+        language="en",
+        last_operator="Earlier Operator",
+    )
 
     if missing_invalidator:
         startup_result = StartupDialogSuccess(
@@ -317,14 +353,24 @@ def _scenario_main_window_close(
             remembered_target=startup_result.remembered_target,
             invalidate_access=None,
             backend_cleanup=startup_result.backend_cleanup,
+            last_operator=startup_result.last_operator,
         )
 
-    shell = _ShellSpy()
+    shell = _ShellSpy(snapshot_config=snapshot_config)
+    app_runtime_state = AppRuntimeState(active_operator=startup_result.last_operator)
+    app_runtime_state.active_operator = runtime_operator
     callback = app_module._build_main_window_close_callback(
         cast(AppShell, cast(object, shell)),
         startup_result,
+        config_path=config_path,
+        bootstrap_ui_config=bootstrap_ui_config,
+        app_runtime_state=app_runtime_state,
     )
-    view = MainWindowShellView(root, close_callback=callback)
+    view = MainWindowShellView(
+        root,
+        app_runtime_state=app_runtime_state,
+        close_callback=callback,
+    )
     database_exists_before_close = Path(database_config.database_path).exists()
     view.handle_close_requested()
 
@@ -607,10 +653,13 @@ def test_main_window_close_request_releases_active_context_and_closes_shell_with
         partial(
             _scenario_main_window_close,
             database_config=database_config,
+            config_path=config_path,
             missing_invalidator=False,
+            runtime_operator="Captain Runtime",
         )
     )
     parser = load_app_config(config_path)
+    bootstrap_ui = load_bootstrap_ui_config(config_path)
 
     assert result == {
         "close_called": True,
@@ -622,6 +671,17 @@ def test_main_window_close_request_releases_active_context_and_closes_shell_with
     assert log_path.exists() is True
     assert parser.get(parser.default_section, "db_type") == "sqlite"
     assert parser.get("sqlite", "database_path") == Path(database_config.database_path).name
+    assert bootstrap_ui == BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state="zoomed",
+            window_width=1440,
+            window_height=900,
+            window_x=25,
+            window_y=35,
+        ),
+        language="en",
+        last_operator="Captain Runtime",
+    )
 
 
 def test_main_window_close_request_keeps_shell_open_and_preserves_access_when_active_context_exposes_no_invalidator(
@@ -633,7 +693,9 @@ def test_main_window_close_request_keeps_shell_open_and_preserves_access_when_ac
         partial(
             _scenario_main_window_close,
             database_config=database_config,
+            config_path=config_path,
             missing_invalidator=True,
+            runtime_operator="",
         )
     )
     parser = load_app_config(config_path)
@@ -648,6 +710,8 @@ def test_main_window_close_request_keeps_shell_open_and_preserves_access_when_ac
     assert log_path.exists() is True
     assert parser.get(parser.default_section, "db_type") == "sqlite"
     assert parser.get("sqlite", "database_path") == Path(database_config.database_path).name
+    assert parser.has_section("Application") is False
+    assert parser.has_section("User") is False
 
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from configparser import ConfigParser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 from os import PathLike
 from pathlib import Path
@@ -16,6 +16,31 @@ DEFAULT_REQUIRE_KEY_FILE_FOR_CREATION = False
 DEFAULT_MIN_PASSWORD_LENGTH = 8
 DEFAULT_SECURE_DELETE_PASSES = 3
 DEFAULT_KDF_ITERATIONS = 100_000
+DEFAULT_LANGUAGE = "sv"
+DEFAULT_WINDOW_STATE = "normal"
+DEFAULT_WINDOW_WIDTH = 1200
+DEFAULT_WINDOW_HEIGHT = 700
+DEFAULT_WINDOW_X = 100
+DEFAULT_WINDOW_Y = 100
+DEFAULT_TEMPLATE_DIALECT = "sqlite"
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_FILE_LOGGING_ENABLED = True
+DEFAULT_LOG_FILE_PATH = "logs/eventlog.log"
+DEFAULT_LOG_FILE_MAX_BYTES = 10_485_760
+DEFAULT_LOG_FILE_BACKUP_COUNT = 5
+DEFAULT_CONSOLE_LOGGING_ENABLED = True
+DEFAULT_CONSOLE_LOG_LEVEL = "WARNING"
+DEFAULT_STATUS_BAR_LOG_LEVEL = "WARNING"
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+CONFIG_TEMPLATE_FILENAME = "config.ini.template"
+
+_SUPPORTED_WINDOW_STATES = frozenset({"normal", "zoomed"})
+
+
+def _escape_template_option_value(value: str) -> str:
+    """Return a config-template-safe literal string for ConfigParser-based INI files."""
+    return value.replace("%", "%%")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +124,26 @@ class DatabaseConfig:
     def has_partial_bootstrap_memory(self) -> bool:
         """Return whether remembered bootstrap memory exists but needs recovery UI."""
         return self.bootstrap_target.has_partial_remembered_values
+
+
+@dataclass(frozen=True, slots=True)
+class MainWindowConfig:
+    """Bootstrap-owned main-window geometry and supported top-level state."""
+
+    window_state: str = DEFAULT_WINDOW_STATE
+    window_width: int = DEFAULT_WINDOW_WIDTH
+    window_height: int = DEFAULT_WINDOW_HEIGHT
+    window_x: int = DEFAULT_WINDOW_X
+    window_y: int = DEFAULT_WINDOW_Y
+
+
+@dataclass(frozen=True, slots=True)
+class BootstrapUiConfig:
+    """Bootstrap-owned app UI and startup-user convenience settings."""
+
+    main_window: MainWindowConfig = field(default_factory=MainWindowConfig)
+    language: str = DEFAULT_LANGUAGE
+    last_operator: str = ""
 
 
 def load_app_config(config_path: str | PathLike[str]) -> ConfigParser:
@@ -226,9 +271,253 @@ def _get_int_option(
         return default
 
 
+def _get_positive_int_option(
+    parser: ConfigParser,
+    section: str | None,
+    option: str,
+    *,
+    default: int,
+) -> int:
+    """Return a strictly positive int option or the provided default."""
+    value = _get_int_option(parser, section, option, default=default)
+    if value > 0:
+        return value
+
+    lookup_section = _resolve_lookup_section(parser, section)
+    LOGGER.warning(
+        "Out-of-range config value for %s.%s; using default %r.",
+        lookup_section,
+        option,
+        default,
+    )
+    return default
+
+
+def _get_supported_window_state_option(
+    parser: ConfigParser,
+    section: str | None,
+    option: str,
+    *,
+    default: str,
+) -> str:
+    """Return a supported persisted window state or the provided default."""
+    lookup_section = _resolve_lookup_section(parser, section)
+    resolved_value = parser.get(lookup_section, option, fallback=default).strip().lower()
+    if resolved_value in _SUPPORTED_WINDOW_STATES:
+        return resolved_value
+
+    LOGGER.warning(
+        "Invalid config value for %s.%s; using default %r.",
+        lookup_section,
+        option,
+        default,
+    )
+    return default
+
+
+def _normalize_language(value: str) -> str:
+    """Return normalized bootstrap language with fallback to the code default."""
+    normalized_value = value.strip().lower()
+    return normalized_value or DEFAULT_LANGUAGE
+
+
+def _normalize_window_state(value: str) -> str:
+    """Return a supported persisted window state for storage."""
+    normalized_value = value.strip().lower()
+    if normalized_value in _SUPPORTED_WINDOW_STATES:
+        return normalized_value
+
+    return DEFAULT_WINDOW_STATE
+
+
 def _get_selected_dialect(parser: ConfigParser) -> str:
     """Return the explicitly remembered/selected startup dialect from config."""
     return _get_stripped_option(parser, None, "db_type").lower()
+
+
+def parse_bootstrap_ui_config(parser: ConfigParser) -> BootstrapUiConfig:
+    """Extract bootstrap-owned main-window and startup-user convenience settings."""
+    return BootstrapUiConfig(
+        main_window=MainWindowConfig(
+            window_state=_get_supported_window_state_option(
+                parser,
+                "Application",
+                "window_state",
+                default=DEFAULT_WINDOW_STATE,
+            ),
+            window_width=_get_positive_int_option(
+                parser,
+                "Application",
+                "window_width",
+                default=DEFAULT_WINDOW_WIDTH,
+            ),
+            window_height=_get_positive_int_option(
+                parser,
+                "Application",
+                "window_height",
+                default=DEFAULT_WINDOW_HEIGHT,
+            ),
+            window_x=_get_int_option(
+                parser,
+                "Application",
+                "window_x",
+                default=DEFAULT_WINDOW_X,
+            ),
+            window_y=_get_int_option(
+                parser,
+                "Application",
+                "window_y",
+                default=DEFAULT_WINDOW_Y,
+            ),
+        ),
+        language=_normalize_language(_get_stripped_option(parser, "Application", "language")),
+        last_operator=_get_stripped_option(parser, "User", "last_operator"),
+    )
+
+
+def load_bootstrap_ui_config(config_path: str | PathLike[str]) -> BootstrapUiConfig:
+    """Load bootstrap-owned main-window and startup-user settings from an INI path."""
+    return parse_bootstrap_ui_config(load_app_config(config_path))
+
+
+def save_bootstrap_ui_config(
+    config_path: str | PathLike[str],
+    bootstrap_ui_config: BootstrapUiConfig,
+) -> None:
+    """Persist bootstrap-owned UI/user settings while preserving unrelated sections."""
+    parser = load_app_config(config_path)
+    normalized_path = Path(config_path).expanduser()
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not parser.has_section("Application"):
+        parser.add_section("Application")
+    if not parser.has_section("User"):
+        parser.add_section("User")
+
+    main_window = bootstrap_ui_config.main_window
+    parser["Application"]["window_state"] = _normalize_window_state(main_window.window_state)
+    parser["Application"]["window_width"] = str(max(1, int(main_window.window_width)))
+    parser["Application"]["window_height"] = str(max(1, int(main_window.window_height)))
+    parser["Application"]["window_x"] = str(int(main_window.window_x))
+    parser["Application"]["window_y"] = str(int(main_window.window_y))
+    parser["Application"]["language"] = _normalize_language(bootstrap_ui_config.language)
+    parser["User"]["last_operator"] = bootstrap_ui_config.last_operator.strip()
+
+    with normalized_path.open("w", encoding="utf-8") as config_file:
+        parser.write(config_file)
+
+
+def render_config_template() -> str:
+    """Return the canonical reference ``config.ini.template`` text.
+
+    The generated content is code-owned and deterministic so the checked-in
+    template can be regenerated without treating that checked-in file as the
+    runtime authority.
+    """
+    bootstrap_ui_defaults = BootstrapUiConfig()
+    main_window_defaults = bootstrap_ui_defaults.main_window
+
+    template_lines = [
+        "# EventLog Application Configuration Template",
+        "# Copy this to config.ini and customize for your installation",
+        "",
+        "[DEFAULT]",
+        "# Shared fallback values for bootstrap/security-related settings.",
+        "# Regular sections such as [sqlite], [Logging], and [Application] remain valid;",
+        "# values placed here are simply inherited unless a section overrides them.",
+        "# These values are convenience state only; existing encrypted databases remain",
+        "# authoritative for their own runtime security values.",
+        "",
+        "# Selected database technology.",
+        "# Startup resolves technology first, then uses that technology section for its",
+        "# remembered target details and any technology-specific overrides.",
+        "# sqlite is the only supported runtime today.",
+        f"db_type = {DEFAULT_TEMPLATE_DIALECT}",
+        "",
+        "# Whether NEW databases created on this machine must use a key file.",
+        "# This is separate from the technology section's `require_key_file`, which only remembers whether",
+        "# the last already-created database used key-file mode at unlock time.",
+        f"require_key_file_for_creation = {str(DEFAULT_REQUIRE_KEY_FILE_FOR_CREATION).lower()}",
+        "",
+        "# Minimum password length used when creating a NEW database.",
+        f"min_password_length = {DEFAULT_MIN_PASSWORD_LENGTH}",
+        "",
+        "# Best-effort overwrite passes for emergency Nollställ cleanup.",
+        f"secure_delete_passes = {DEFAULT_SECURE_DELETE_PASSES}",
+        "",
+        "# PBKDF2 iteration default used when creating a NEW encrypted database.",
+        "# Existing encrypted databases must not silently inherit later config changes here.",
+        f"kdf_iterations = {DEFAULT_KDF_ITERATIONS}",
+        "",
+        "# NEVER store passwords, derived keys, raw key-file content, or remembered key-file paths",
+        "# in config.ini, logs, or database tables.",
+        "",
+        "[sqlite]",
+        "# Remembered startup hints for the selected SQLite target.",
+        "# SQLite-specific overrides for shared [DEFAULT] values may also be added here if needed.",
+        "# These values help prefill the startup UI, but they are not authoritative and",
+        "# must never prevent recovery-capable startup if they are missing or malformed.",
+        "",
+        "# Remembered last-used SQLite database target/path.",
+        "database_path = eventlog.db",
+        "",
+        "# Remembered last-used unlock mode hint for this SQLite target.",
+        "# This is startup memory for opening an already-created database, not the admin",
+        "# policy for whether NEW databases must use a key file.",
+        "# Do NOT store any key-file path here.",
+        f"require_key_file = {str(DEFAULT_REQUIRE_KEY_FILE).lower()}",
+        "",
+        "# Optional SQLite-specific override examples:",
+        "# min_password_length = 10",
+        "# require_key_file_for_creation = true",
+        "",
+        "[Logging]",
+        "# Log levels: DEBUG, INFO, WARNING, ERROR, CRITICAL",
+        f"log_level = {DEFAULT_LOG_LEVEL}",
+        "",
+        "# File logging",
+        f"file_logging_enabled = {str(DEFAULT_FILE_LOGGING_ENABLED).lower()}",
+        f"log_file_path = {DEFAULT_LOG_FILE_PATH}",
+        f"log_file_max_bytes = {DEFAULT_LOG_FILE_MAX_BYTES}  # 10 MB per file",
+        f"log_file_backup_count = {DEFAULT_LOG_FILE_BACKUP_COUNT}  # Keep {DEFAULT_LOG_FILE_BACKUP_COUNT} old log files (total ~50 MB)",
+        "",
+        "# Console logging (for development/debugging)",
+        f"console_logging_enabled = {str(DEFAULT_CONSOLE_LOGGING_ENABLED).lower()}",
+        f"console_log_level = {DEFAULT_CONSOLE_LOG_LEVEL}  # Less verbose for console",
+        "",
+        "# Status bar logging (GUI - shows in status bar)",
+        f"status_bar_log_level = {DEFAULT_STATUS_BAR_LOG_LEVEL}  # Default: WARNING+ (WARNING, ERROR, CRITICAL)",
+        "",
+        "# Log format",
+        f"log_format = {_escape_template_option_value(DEFAULT_LOG_FORMAT)}",
+        f"date_format = {_escape_template_option_value(DEFAULT_DATE_FORMAT)}",
+        "",
+        "[Application]",
+        "# Application window settings (managed by app, modify with caution)",
+        f"window_state = {main_window_defaults.window_state}",
+        f"window_width = {main_window_defaults.window_width}",
+        f"window_height = {main_window_defaults.window_height}",
+        f"window_x = {main_window_defaults.window_x}",
+        f"window_y = {main_window_defaults.window_y}",
+        "",
+        "# Language (sv = Swedish, en = English)",
+        f"language = {bootstrap_ui_defaults.language}",
+        "",
+        "[User]",
+        "# Bootstrap-only user convenience values.",
+        "# This section must never contain secrets; it only helps prefill startup UI.",
+        "last_operator =",
+        "",
+    ]
+    return "\n".join(template_lines)
+
+
+def write_config_template(template_path: str | PathLike[str]) -> Path:
+    """Write the canonical reference ``config.ini.template`` to disk and return its path."""
+    normalized_path = Path(template_path).expanduser()
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_path.write_text(render_config_template(), encoding="utf-8")
+    return normalized_path
 
 
 def parse_database_config(parser: ConfigParser) -> DatabaseConfig | None:

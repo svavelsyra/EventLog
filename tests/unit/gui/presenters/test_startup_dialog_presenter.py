@@ -64,6 +64,7 @@ def _make_submission(
     *,
     mode: StartupDialogMode,
     dialect: str = "sqlite",
+    operator: str = "",
     uses_remembered_target: bool = False,
     database_path: str = "eventlog.db",
     password: str = "",
@@ -73,6 +74,7 @@ def _make_submission(
     return StartupDialogSubmission(
         mode=mode,
         dialect=dialect,
+        operator=operator,
         uses_remembered_target=uses_remembered_target,
         field_values={
             StartupFieldName.DATABASE_PATH: database_path,
@@ -137,6 +139,14 @@ def test_get_initial_state_falls_back_to_create_when_bootstrap_target_is_missing
     assert state.show_target_source_selector is False
     assert state.show_dialect_picker is True
     assert state.backend_fields == ()
+
+
+def test_get_initial_state_preserves_operator_prefill_in_view_state() -> None:
+    presenter = StartupDialogPresenter(_make_config(dialect="", database_path=""))
+
+    state = presenter.get_initial_state(operator="  Sgt Example  ")
+
+    assert state.operator == "Sgt Example"
 
 
 def test_build_state_for_create_stays_target_only_until_sqlite_path_is_selected() -> None:
@@ -329,6 +339,40 @@ def test_recompute_state_switches_missing_manual_target_back_to_create_and_drops
     assert StartupFieldName.PASSWORD_CONFIRMATION in [field.field_name for field in state.backend_fields]
 
 
+def test_recompute_state_preserves_operator_in_view_state() -> None:
+    presenter = StartupDialogPresenter(_make_config(dialect="", database_path=""))
+
+    state = presenter.recompute_state(
+        _make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            operator="  Sgt Example  ",
+            database_path="C:/Ops/new-eventlog.db",
+            password="lösenord123",
+            password_confirmation="lösenord123",
+        )
+    )
+
+    assert state.operator == "Sgt Example"
+
+
+def test_recompute_state_preserves_key_file_path_in_view_state() -> None:
+    presenter = StartupDialogPresenter(_make_config(dialect="", database_path=""))
+
+    state = presenter.recompute_state(
+        _make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            database_path="C:/Ops/new-eventlog.db",
+            password="lösenord123",
+            password_confirmation="lösenord123",
+            key_file_path="  C:/keys/startup.key  ",
+        )
+    )
+
+    assert state.key_file_path == "C:/keys/startup.key"
+
+
 def test_submit_manual_unlock_remembers_actual_key_file_usage_after_success(tmp_path: Path) -> None:
     sentinel_repository = cast(BaseRepository, object())
 
@@ -354,6 +398,33 @@ def test_submit_manual_unlock_remembers_actual_key_file_usage_after_success(tmp_
     assert result.succeeded is True
     assert result.success is not None
     assert result.success.remembered_target.require_key_file is True
+
+
+def test_submit_success_returns_stripped_last_operator(tmp_path: Path) -> None:
+    sentinel_repository = cast(BaseRepository, object())
+
+    def fake_bootstrap(_request):
+        return BootstrapRepositoryResult(repository=sentinel_repository)
+
+    presenter = StartupDialogPresenter(
+        _make_config(dialect="sqlite", database_path=""),
+        bootstrap_callback=fake_bootstrap,
+    )
+
+    result = presenter.submit(
+        _make_submission(
+            mode=StartupDialogMode.CREATE,
+            dialect="sqlite",
+            operator="  Sgt Example  ",
+            database_path=str(tmp_path / "eventlog.db"),
+            password="lösenord123",
+            password_confirmation="lösenord123",
+        )
+    )
+
+    assert result.succeeded is True
+    assert result.success is not None
+    assert result.success.last_operator == "Sgt Example"
 
 
 def test_submit_create_rejects_password_confirmation_mismatch() -> None:

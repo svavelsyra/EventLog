@@ -1,148 +1,133 @@
 # GUI Implementation Learnings
 
-**Purpose**: Tkinter-specific lessons, common pitfalls, and implementation patterns learned during GUI development.
+**Purpose**: Durable Tkinter, presenter/view, and GUI-testing guidance for this project.
 
-**Last Updated**: 2026-05-06 (Session 096 - Added GUI reset integration-test pattern)
+**Last Updated**: 2026-05-07 (Session 102 - Refocused file on durable GUI guidance instead of session chronology)
 
-## Tkinter Grid Layout
+---
 
-### Common Pitfall: Misaligned Form Fields
+## What Belongs In This File
 
-**Problem**: Entry, Combobox, and Text widgets with fixed character widths don't align properly in grid layout.
+- Keep reusable GUI rules, stable boundary decisions, and durable testing patterns here.
+- Keep session-by-session narration, temporary migration notes, and "I changed X" history in `session_logs/`.
+- Favor compact, high-signal rules over exhaustive historical context.
 
-**Why it happens**:
-- Different widget types have different default sizes and padding
-- Fixed character widths (e.g., `width=20`) don't account for widget borders
-- Without sticky parameters, widgets don't expand to fill columns
-- Without column weights, columns use minimum size
+---
 
-**Solution Pattern**:
-```python
-# 1. Configure column weights FIRST
-form_frame.columnconfigure(1, weight=1)  # Input column expands
-form_frame.columnconfigure(3, weight=1)  # Input column expands
+## Tkinter Layout And Sizing
 
-# 2. Remove fixed widths, use sticky parameter
-ttk.Entry(form_frame).grid(row=0, column=1, sticky=tk.W+tk.E, padx=(2,5), pady=2)
-ttk.Combobox(form_frame, values=...).grid(row=1, column=1, sticky=tk.W+tk.E, padx=(2,5), pady=2)
+### Prefer grid weights and sticky expansion over fixed widths
 
-# 3. Text widgets need width=1 (minimum) then expand with sticky
-tk.Text(form_frame, height=3, width=1).grid(row=2, column=1, columnspan=3, sticky=tk.W+tk.E, padx=(2,5), pady=2)
-```
+**Problem**: Entry, Combobox, and Text widgets with fixed character widths often misalign or clip on small screens.
 
-**Key Points**:
-- `columnconfigure(col, weight=1)` → Column expands to fill space
-- `sticky=tk.W+tk.E` → Widget expands horizontally within cell
-- `sticky=tk.NW` → For labels next to multi-line Text widgets (top-align)
-- Consistent padding: Labels `padx=(5,2)`, Fields `padx=(2,5)` creates visual grouping
+**Use this pattern**:
+- Configure the input columns with grid weight before placing expanding widgets.
+- Grid single-line inputs with horizontal sticky expansion and consistent field padding.
+- For multi-line `Text`, keep the width minimal and let the grid cell provide the actual width.
 
-## Window Sizing
+**Key points**:
+- Configure column weights before placing expanding widgets.
+- Use `sticky=tk.W + tk.E` for horizontally stretchable inputs.
+- Use `sticky=tk.NW` for labels beside multi-line fields.
+- Keep padding consistent so labels and inputs read as one form.
 
-### Common Pitfall: Fixed Window Size Clips Content
+### Size windows after creating widgets
 
-**Problem**: Using `geometry("500x300")` without checking if content fits.
+**Problem**: Hard-coded geometry can clip content on the target small-screen hardware.
 
-**Solution Pattern**:
-```python
-# 1. Set minimum size
-self.root.minsize(min_width, min_height)
+**Use this pattern**:
+1. Set the minimum supported window size first.
+2. Create the widgets.
+3. Let Tk calculate required size with `update_idletasks()`.
+4. Clamp the final size against the minimum supported dimensions.
+5. Apply the resulting geometry only after that calculation.
 
-# 2. Create widgets
-self._create_widgets()
+**Rule**: Let Tk calculate required size after widget creation, then clamp to the minimum supported size.
 
-# 3. Let window calculate required size
-self.root.update_idletasks()
-width = max(min_width, self.root.winfo_reqwidth())
-height = max(min_height, self.root.winfo_reqheight())
+---
 
-# 4. Set calculated size and position
-self.root.geometry(f"{width}x{height}+{x}+{y}")
-```
+## GUI Boundary Rules
 
-**Lesson**: Create widgets before sizing window, let Tkinter calculate required dimensions.
+### Prefer read-only structural protocols across GUI/app boundaries
 
-## Common Mistakes to Avoid
+- When the GUI consumes result objects from another layer, prefer read-only `@property` protocol members over writable protocol attributes.
+- Prefer structural conformance over forcing app-layer value objects to inherit GUI-specific protocols.
+- Keep advisory information separate from failure lists so the GUI can distinguish "warning/follow-up" from true operation failure.
 
-❌ **DON'T**:
-- Use fixed character widths when you want responsive layout
-- Place widgets without sticky parameter if they should expand
-- Forget to configure column/row weights
-- Size window before creating widgets
-- Assume all widgets have same visual width with same character width
+### Keep startup flow ownership in the presenter
 
-✅ **DO**:
-- Configure grid weights before placing widgets
-- Use sticky parameter on all input widgets
-- Test on minimum target screen size (800x600)
-- Size windows after widget creation
-- Account for different widget padding/borders
+- If startup mode, visible fields, or remembered/manual target behavior depends on current operator input, that logic belongs in the presenter.
+- The startup controller should stay thin: read `StartupDialogSubmission`, ask the presenter for state, render `StartupDialogState`, and manage UI-side effects such as focus or close behavior.
+- Do not split initial startup resolution and later interactive recomputation across different layers.
 
-## Future Learnings
+### Prefer whole-state rendering and structured submission over per-field plumbing
 
-## Session 062 - GUI/App Protocol Boundaries
+- Treat `StartupDialogState` as the normal render seam.
+- Treat `StartupDialogSubmission` as the normal readback seam.
+- Do not add one getter/setter or hidden flag per field unless there is a clear lasting reason.
+- If a value must survive presenter-driven rerenders, promote it into presenter-owned state instead of patching it into the view with a special setter.
+- When presenter-owned field values must stay current even while a field becomes hidden, synchronize those state-backed values in one dedicated place during render instead of splitting the same field sync across multiple branches.
+- In GUI state-to-widget synchronization, a small equality guard before writing a widget variable is acceptable defensive code even when it looks redundant; Tk/GUI code tends to accumulate side effects over time, so avoiding unnecessary writes can be the safer default when it does not complicate the seam.
 
-- When the GUI layer consumes a minimal protocol from app-owned result objects, define protocol members as read-only `@property` accessors instead of writable data attributes. Static type checkers may reject frozen dataclasses or named tuples as satisfying writable protocol attributes even when the runtime behavior is effectively immutable.
-- Prefer structural conformance across the GUI/app boundary over nominal inheritance from GUI protocols in app-layer value objects. The app should return a normal result object with read-only properties, and the GUI protocol should describe only the read operations it needs.
-- When a caller result needs to warn about a manual operator action that is not itself a reset failure (for example possible external key files), keep that signal in a separate advisory field rather than smuggling it into the same follow-up issue list that drives `MISSLYCKADES` messaging. GUI copy can then decide when to show the advisory without corrupting the success/failure contract.
+### Do not duplicate field-contract facts or round-trip policy flags through the view
 
-## Session 064 - Startup Dialog State Should Not Duplicate Field Contract Facts
+- If shared field metadata already describes requiredness, presence, or editability, let the view derive those facts from the field contract.
+- Do not add extra presenter/view booleans for facts already present in the shared backend field contract.
+- Treat administrator policy as presenter/config input and operator-entered values as submission input; do not send hidden policy booleans back through the view.
 
-- When startup state already carries a shared field contract like `backend_fields`, do not add extra booleans for field presence, requiredness, or editability. Let the view derive those facts from the field contract so presenter state has one source of truth.
-- For startup dialogs, label text and hint visibility may still be GUI-owned, but they should be derived from stable field identities plus presenter-provided copy rather than mirrored through extra state flags.
+### Prefer intent-level seams over generic mutation seams
 
-## Session 065 - Startup Policy Flags Should Not Round-Trip Through the View
+- Prefer narrow intent-specific methods when one write seam is genuinely needed.
+- Avoid generic controller-facing field mutation APIs unless the controller truly needs unconstrained mutation.
+- If several widget events all mean "submission changed, recompute presenter state", route them through one callback seam.
+- Do not keep one private handler per widget/event when they all forward unchanged to the same action; that sets a precedent for callback-noise proliferation and teaches future work to copy ceremony instead of identifying the real seam.
+- When one notifier can safely satisfy both `command=` and `bind(...)`, prefer wiring directly to that notifier over naming multiple identical pass-through wrappers.
+- If several direct actions are distinct but belong to the same registration concern, bundle them in one stable action-callback contract.
+- Once the final seam is adopted, remove obsolete compatibility wrappers instead of leaving dead transitional API behind.
 
-- If a startup requirement like key-file mandatory/optional status is already expressed by the shared `backend_fields` contract, do not add a hidden presenter/view submission boolean such as `require_key_file` just to carry policy through re-renders.
-- Treat administrator-configured policy as presenter/config input and operator-entered values as submission input. The view should submit the chosen `key_file_path`, not a second hidden policy toggle.
+---
 
-## Session 065 - Startup Mode Inference and Review-Churn Guardrail
+## Startup Dialog Specific Guidance
 
-- For current SQLite startup flows, do not add an explicit create/open selector in the UI. Create vs unlock should continue to be inferred from the selected target path (`database_path` exists => unlock, otherwise create).
-- Treat `show_mode_selector` as a future backend-capability escape hatch for technologies whose selected target cannot imply create vs unlock. It is not a dormant SQLite control that should be revived by default.
-- When the startup area already has a known larger structural destination, avoid intermediate GUI cleanups that are likely to be replaced in the next session and therefore create extra review churn. Prefer the real structural slice instead.
+### Infer SQLite create vs unlock from the selected path
 
-## Session 066 - Startup Refactor Steps Should Land in the Final Structure
+- For the current SQLite flow, do not add a separate create/open selector in the UI.
+- Infer create vs unlock from whether the selected database path already exists.
+- Keep `show_mode_selector` only as a future backend-capability escape hatch, not as a dormant SQLite control.
 
-- The startup refactor has an explicit user-approved exception to the default small-step preference: do not manufacture temporary presenter/view/controller shapes purely to make the current patch smaller if those shapes are expected to be removed immediately by the next approved startup step.
-- For this refactor, step size should be judged by lasting architectural value and review efficiency, not only by line-count minimization. Prefer a larger coherent slice when it lands directly in the intended field-driven structure.
+### Database browse flow must support existing or new paths
 
-## Session 067 - Startup Flow Ownership Belongs in the Presenter
+- The startup database picker must allow selecting an existing database or specifying a new one from the same browse action.
+- Prefer the save-style Tk dialog with `confirmoverwrite=False` so Windows does not show a misleading overwrite prompt during target selection.
+- Keep nearby Swedish copy neutral so it does not promise only existing-database selection.
 
-- When startup mode or visible startup-state changes depend on current operator input (`dialect`, `database_path`, remembered/manual target choice), treat that as presenter-owned flow logic, not controller policy.
-- The startup controller should remain a thin Tk adapter: read current view submission, call the presenter for recomputed state, render it, and manage browse/reset/close wiring.
-- Avoid splitting initial startup-state resolution and later interactive recomputation across different layers. If the presenter owns ongoing startup state decisions, it should also own initial remembered-target resolution so there is one authoritative startup flow path.
+---
 
-## Session 068 - Do Not Leave Known Startup Architecture Mismatches To Grow
+## Main-Window Lifecycle Guidance
 
-- When a remaining startup-area architectural mismatch is already identified and new work would otherwise accumulate on top of it, do not accept “works for now” as sufficient justification to leave it in place.
-- For startup refactors, prefer the next durable ownership-alignment slice over a smaller tactical patch if the smaller patch would knowingly preserve a mismatch that future work will build on.
-- The user wants restart-ready session guidance that names the exact next architectural slice, so a future AI can continue with a simple “go on” prompt instead of rediscovering the intended direction.
+- Keep destructive reset wired through app-owned callbacks, not widget-local cleanup code.
+- Keep normal shell close on a separate app-owned seam from destructive reset.
+- The shell view should stay thin: register callbacks, display coarse status, and let app ownership decide whether the window closes.
 
-## Session 092 - Model Presenter-Shaped Neutral Startup States Explicitly In View Tests
+---
 
-- When a Tk view test needs to verify a narrow startup state that depends on presenter filtering (for example blank-path SQLite create showing only the target field), prefer constructing an explicit `StartupDialogState` over reusing a broad helper whose defaults may include extra fields.
-- For startup view coverage, helper builders are still useful for common full-form states, but presenter-specific neutral states should be modeled directly so the test cannot accidentally drift away from the presenter contract.
+## GUI Testing Patterns
 
-## Session 094 - Startup Database Picker Must Allow Existing Or New Paths Without Save-Dialog Nagging
+### Model presenter-shaped states explicitly in view tests
 
-- For the startup database target picker, do not switch to `askopenfilename()` just to avoid the native overwrite prompt; that would break the create-new-database path selection flow.
-- Prefer the save-style Tk dialog with `confirmoverwrite=False` so operators can select an existing database or specify a new database path from the same browse action without getting the misleading Windows "overwrite?" confirmation.
-- When the same manual-target control supports both open and create inference, keep the nearby Swedish UI copy neutral (for example `Välj eller ange databas manuellt`) instead of promising only existing-database selection.
+- When a view test needs a narrow presenter-shaped state, build that state explicitly instead of relying on a broad helper whose defaults may hide contract drift.
 
-## Session 096 - Main-Window Shell Lifecycle Belongs To App-Owned Callbacks
+### Prefer real GUI actions in integration slices
 
-- When the visible main window needs top-level lifecycle behavior such as `Nollställ` or `WM_DELETE_WINDOW`, keep the shell view thin: it should register button/protocol callbacks and display coarse status only.
-- Destructive reset must continue to flow through the existing app-owned reset seam (`run_active_context_reset` or an equivalent wrapper), not a widget-local cleanup implementation.
-- Normal shell close should use a separate app-owned invalidate/release seam from destructive reset so the GUI does not blur ordinary shutdown with data-destruction behavior.
-- A practical small-slice pattern is: app builds lifecycle callbacks, `AppShell` passes them into `MainWindowShellView`, and the view treats a returned status string as coarse operator feedback while successful callbacks close through app-shell ownership.
+- For reset and other lifecycle coverage, prefer a small subprocess-backed Tk slice that clicks real buttons through app-owned callbacks.
+- Keep scenario callables top-level and spawn-safe.
+- Capture whether a dialog remained open immediately after the relevant action if that is part of the contract being tested.
 
-## Session 096 - GUI Reset Integration Tests Should Drive Real Buttons Through App-Owned Callbacks
+### Favor durable test seams over convenience seams
 
-- For reset UI integration coverage, prefer one small Tk subprocess-backed slice that clicks the real GUI buttons and asserts filesystem/config side effects afterward from the parent test process.
-- Use `tests.gui_support.run_isolated_tk_scenario` for Tk isolation, but keep scenario callables top-level and spawn-safe.
-- For startup reset coverage, a durable seam is the real `StartupDialogController` with a captured real `StartupDialogView` plus the app-owned startup emergency-reset callback.
-- For main-window reset coverage, a durable seam is `MainWindowShellView` with the real app-owned reset callback and a minimal shell spy that records whether close ownership was invoked.
-- When scheduling one-shot Tk actions inside these subprocess scenarios, an explicit `after(..., callback, "scheduled")` argument shape can satisfy the type checker more reliably than a bare callback.
-- For startup-dialog reset failures, make the integration scenario capture whether the dialog was still open immediately after the button click before any forced cleanup; otherwise the test can accidentally assert only its own teardown behavior instead of the real UI contract.
-- A verified reset contract worth preserving in integration tests: after active-context access denial succeeds, remembered bootstrap selectors are still cleared even if a later backend-cleanup phase fails. Later cleanup failures should keep the shell open and report follow-up work, but they do not roll back the selector clear.
-
+- Test seams should reinforce the intended public GUI contract, not preserve temporary compatibility scaffolding.
+- If a helper or fake still reflects a transitional API after production code has settled, clean it up rather than teaching future work the wrong shape.
+- In controller tests that use a fake view, prefer intent-level driver helpers over exposing fake widget-like vars/attributes for tests to mutate directly; `select_dialect(...)`, `select_mode(...)`, or `set_operator(...)` teach a better seam than repeated `.set(...)` calls on fake Tk-style state.
+- When a GUI refactor collapses several widget handlers into one shared notifier or dispatcher, update tests to drive the real widgets/bindings again rather than preserving the old event count by calling the shared internal helper repeatedly.
+- In Tk view tests, prefer a realistic widget trigger with any needed focus/update steps over a bare `event_generate(...)` that only approximates the UI path and may silently miss the real binding behavior.
+- When view state synchronization must preserve hidden values across rerenders, add at least one regression that drives a visible-to-hidden transition and confirms `get_submission()` returns the presenter-owned current value rather than stale previously visible widget text.

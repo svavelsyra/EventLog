@@ -2,6 +2,8 @@ import tkinter as tk
 
 import pytest
 
+from src.config import MainWindowConfig
+from src.core.app_runtime_state import AppRuntimeState
 from src.gui.views.main_window_shell_view import MainWindowShellView
 
 
@@ -9,12 +11,16 @@ pytestmark = pytest.mark.unit
 
 
 def _scenario_render_main_window_shell(root: tk.Tk) -> dict[str, object]:
-    view = MainWindowShellView(root)
+    app_runtime_state = AppRuntimeState(active_operator="Sgt Example")
+    view = MainWindowShellView(root, app_runtime_state=app_runtime_state)
     root.update_idletasks()
 
     selected_tab = view.notebook.select()
     return {
         "title": root.title(),
+        "has_menu": bool(str(root.cget("menu"))),
+        "tools_menu_entry_count": view.tools_menu.index("end"),
+        "template_menu_label": view.tools_menu.entrycget(0, "label"),
         "toolbar_manager": view.toolbar_frame.winfo_manager(),
         "toolbar_text": view.toolbar_label.cget("text"),
         "reset_button_text": view.reset_button.cget("text"),
@@ -31,6 +37,7 @@ def _scenario_render_main_window_shell(root: tk.Tk) -> dict[str, object]:
             key: label.cget("text")
             for key, label in view.placeholder_labels.items()
         },
+        "active_operator": view.app_runtime_state.active_operator,
     }
 
 
@@ -38,6 +45,8 @@ def _scenario_invoke_shell_callbacks(root: tk.Tk) -> dict[str, object]:
     events: list[str] = []
     view = MainWindowShellView(
         root,
+        app_runtime_state=AppRuntimeState(),
+        template_callback=lambda: events.append("template") or "Skrev config.ini.template.",
         reset_callback=lambda: events.append("reset") or "Reset misslyckades.",
         close_callback=lambda: events.append("close") or "Stängning misslyckades.",
     )
@@ -46,6 +55,7 @@ def _scenario_invoke_shell_callbacks(root: tk.Tk) -> dict[str, object]:
     close_command = root.protocol("WM_DELETE_WINDOW")
     assert close_command
 
+    view.tools_menu.invoke(0)
     view.reset_button.invoke()
     root.tk.call(close_command)
     return {
@@ -55,10 +65,36 @@ def _scenario_invoke_shell_callbacks(root: tk.Tk) -> dict[str, object]:
     }
 
 
+def _scenario_apply_clamped_window_config(root: tk.Tk) -> dict[str, object]:
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    view = MainWindowShellView(
+        root,
+        app_runtime_state=AppRuntimeState(),
+        window_config=MainWindowConfig(
+            window_state="normal",
+            window_width=screen_width + 500,
+            window_height=screen_height + 500,
+            window_x=-120,
+            window_y=screen_height + 250,
+        ),
+    )
+    root.update_idletasks()
+    snapshot = view.snapshot_window_config()
+    return {
+        "screen_width": screen_width,
+        "screen_height": screen_height,
+        "snapshot": snapshot,
+    }
+
+
 def test_main_window_shell_renders_toolbar_notebook_status_and_placeholder_tabs(run_tk_scenario) -> None:
     result = run_tk_scenario(_scenario_render_main_window_shell)
 
     assert result["title"] == "EventLog - Pluton Event Logger"
+    assert result["has_menu"] is True
+    assert result["tools_menu_entry_count"] == 0
+    assert result["template_menu_label"] == "Skriv configmall"
     assert result["toolbar_manager"] == "grid"
     assert result["toolbar_text"] == "Verktygsfält - shell för kommande kommandon."
     assert result["reset_button_text"] == "Nollställ"
@@ -71,6 +107,7 @@ def test_main_window_shell_renders_toolbar_notebook_status_and_placeholder_tabs(
     assert result["tab_texts"] == ["Kommunikation", "Händelser", "Personal"]
     assert result["selected_tab_text"] == "Kommunikation"
     assert result["tab_host_keys"] == ["communication", "event", "personnel"]
+    assert result["active_operator"] == "Sgt Example"
     assert result["placeholder_texts"] == {
         "communication": "Platshållare för kommande kommunikationsflöde.",
         "event": "Platshållare för kommande händelseflöde.",
@@ -81,8 +118,20 @@ def test_main_window_shell_renders_toolbar_notebook_status_and_placeholder_tabs(
 def test_main_window_shell_invokes_reset_button_and_close_protocol_callbacks(run_tk_scenario) -> None:
     result = run_tk_scenario(_scenario_invoke_shell_callbacks)
 
-    assert result["events"] == ["reset", "close"]
+    assert result["events"] == ["template", "reset", "close"]
     assert result["status_text"] == "Stängning misslyckades."
     assert result["close_command"]
+
+
+def test_main_window_shell_clamps_out_of_bounds_window_geometry(run_tk_scenario) -> None:
+    result = run_tk_scenario(_scenario_apply_clamped_window_config)
+    snapshot = result["snapshot"]
+
+    assert isinstance(snapshot, MainWindowConfig)
+    assert snapshot.window_state == "normal"
+    assert 1 <= snapshot.window_width <= result["screen_width"]
+    assert 1 <= snapshot.window_height <= result["screen_height"]
+    assert snapshot.window_x >= 0
+    assert snapshot.window_y >= 0
 
 

@@ -110,12 +110,20 @@ not as forbidden scope creep.
 - Do **not** invent extra pytest flags, multi-file command combinations, reordered file lists, node selectors, or `-k` filters unless the user explicitly asks.
 - When running tests, reuse the exact approved command shapes and consult `ai_instructions/testing.md` for the detailed policy.
 
+### Approved Git command policy
+
+- Prefer a very small, stable family of read-only Git command shapes to reduce approval churn.
+- Default repository-state command: `Set-Location <project-root>; git --no-pager status`
+- Default working-tree review command: `Set-Location <project-root>; git --no-pager diff`
+- Allowed recent-history command: `Set-Location <project-root>; git --no-pager log --oneline -5`
+- Reuse those exact shapes instead of inventing path-limited diffs, per-file Git commands, extra flags, or alternative inspection variants unless the user explicitly asks.
+- Treat anything outside that family (`git add`, `git commit`, `git checkout`, `git show`, `git blame`, custom `log` flags, file-specific `diff`, etc.) as ask-first territory unless the user directly requested it.
+
 ### General terminal approval friction
 
 - Prefer a very small, stable family of terminal command shapes, not only for pytest.
 - Do **not** introduce extra terminal commands unless they are necessary to complete or verify the task.
-- Simple root-level Git commands like `Set-Location <project-root>; git --no-pager diff` or `Set-Location <project-root>; git --no-pager status` are acceptable when truly needed.
-- Avoid Git command churn such as extra flags, path-limited diffs, or per-file diff command variants unless the user explicitly asks for them.
+- For Git, stick to the approved Git command policy above instead of improvising new variants.
 - Reason: approval friction comes from command-shape variation itself, not only from pytest flags.
 
 ---
@@ -131,6 +139,7 @@ not as forbidden scope creep.
    - Use minimal, focused changes
    - Keep changes logically grouped
    - Preserve existing structure/style
+   - Prefer the simplest sane ownership shape for small state: do not create a dedicated file/class plus getter/setter methods for each single scalar value when a plain attribute on an existing or broader state object is enough
    - Prefer updating existing rows/entries/lines in place when that preserves the contract; add new rows/lines only when the change truly introduces new information or a new required branch
    - If multiple project documents repeatedly state a layer boundary or ownership rule, do NOT bypass it with a tactical fix even if the bug is real; move the fix to the owning layer or rethink the patch before proceeding
 
@@ -152,6 +161,14 @@ not as forbidden scope creep.
 - If a code-like example is truly needed, keep it short, explicitly label it as illustrative/current-example/pseudocode, and avoid presenting it as the only acceptable implementation path.
 - Exact schemas, config formats, SQL DDL, or protocol/order requirements may still be documented concretely when precision is the point.
 - Reason: concrete implementation code in design docs locks implementers in too early, encourages copy-paste without thinking, and makes docs stale when code evolves.
+
+### AI memory files are durable guidance, not session history
+
+- `ai_memory/*.md` should store reusable rules, stable patterns, boundary decisions, and durable user preferences.
+- Do **not** fill AI memory files with chronological "I changed X in Session Y" narration when the real value is only historical context.
+- Put task chronology, temporary migration notes, and step-by-step "what happened" detail in `session_logs/` instead.
+- When updating an AI memory file, prefer extracting the durable lesson from a change rather than copying the change history itself.
+- Reason: more context is not automatically better; the goal is the right context with low noise.
 
 ---
 
@@ -322,5 +339,5 @@ AI: [Starts file2.md without waiting] ← WRONG! Violated protocol
 
 ---
 
-**Last Updated**: 2026-05-06 (Session 091 - Added stable terminal-command preference to avoid approval churn from ad-hoc Git variants)
+**Last Updated**: 2026-05-07 (Session 102 - Added explicit approved Git command family and AI-memory scope rule)
 

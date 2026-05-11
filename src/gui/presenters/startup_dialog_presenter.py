@@ -83,6 +83,7 @@ class StartupDialogState:
     min_password_length: int
     password_policy_hint: str
     allow_emergency_reset: bool
+    key_file_path: str = ""
     available_modes: tuple[StartupDialogMode, ...] = (
         StartupDialogMode.CREATE,
         StartupDialogMode.UNLOCK,
@@ -90,6 +91,7 @@ class StartupDialogState:
     show_mode_selector: bool = False
     uses_remembered_target: bool = False
     remembered_target_is_available: bool = False
+    operator: str = ""
     show_target_source_selector: bool = False
     show_dialect_picker: bool = True
     backend_fields: tuple[StartupFieldRequirement, ...] = ()
@@ -105,6 +107,7 @@ class StartupDialogSubmission:
 
     mode: StartupDialogMode
     dialect: str
+    operator: str = ""
     uses_remembered_target: bool = False
     field_values: Mapping[StartupFieldName, str] = field(default_factory=dict)
 
@@ -131,6 +134,7 @@ class StartupDialogSuccess:
 
     repository: object
     remembered_target: BootstrapTargetConfig
+    last_operator: str = ""
     invalidate_access: Callable[[], None] | None = None
     backend_cleanup: BackendCleanup | None = None
 
@@ -168,6 +172,7 @@ class _NormalizedStartupSubmission:
     mode: StartupDialogMode
     uses_remembered_target: bool
     dialect: str
+    operator: str
     database_path: str
     field_values: dict[StartupFieldName, str]
     backend_fields: tuple[StartupFieldRequirement, ...]
@@ -251,7 +256,7 @@ class StartupDialogPresenter:
         self._startup_field_resolver = startup_field_resolver
         self._startup_mode_resolver = startup_mode_resolver
 
-    def get_initial_state(self) -> StartupDialogState:
+    def get_initial_state(self, *, operator: str = "") -> StartupDialogState:
         """Return the preferred initial dialog state from remembered bootstrap hints."""
         initial_mode = (
             StartupDialogMode.UNLOCK
@@ -262,6 +267,7 @@ class StartupDialogPresenter:
             StartupDialogSubmission(
                 mode=initial_mode,
                 dialect=self._database_config.dialect,
+                operator=operator,
                 uses_remembered_target=self._database_config.can_attempt_auto_open,
                 field_values={
                     StartupFieldName.DATABASE_PATH: self._database_config.database_path,
@@ -287,6 +293,8 @@ class StartupDialogPresenter:
             mode=resolved_mode,
             dialect=normalized_submission.dialect,
             database_path=normalized_submission.database_path,
+            key_file_path=normalized_submission.get_field_value(StartupFieldName.KEY_FILE_PATH),
+            operator=normalized_submission.operator,
             use_remembered_target=resolved_use_remembered_target,
         )
 
@@ -296,6 +304,8 @@ class StartupDialogPresenter:
         mode: StartupDialogMode,
         dialect: str | None = None,
         database_path: str | None = None,
+        key_file_path: str = "",
+        operator: str = "",
         use_remembered_target: bool | None = None,
     ) -> StartupDialogState:
         """Return the current view-facing dialog state for the requested mode."""
@@ -311,6 +321,7 @@ class StartupDialogPresenter:
 
         resolved_dialect = self._normalize_dialect(source_dialect or "")
         resolved_database_path = self._normalize_database_path(source_database_path or "")
+        resolved_key_file_path = self._normalize_optional_path(key_file_path)
         remembered_target_is_available = self._database_config.can_attempt_auto_open
 
         if mode is StartupDialogMode.CREATE:
@@ -338,9 +349,11 @@ class StartupDialogPresenter:
                 min_password_length=self._database_config.min_password_length,
                 password_policy_hint=self._build_password_policy_hint(),
                 allow_emergency_reset=False,
+                key_file_path=resolved_key_file_path,
                 show_mode_selector=False,
                 uses_remembered_target=False,
                 remembered_target_is_available=remembered_target_is_available,
+                operator=operator,
                 show_target_source_selector=False,
                 show_dialect_picker=True,
                 backend_fields=backend_fields,
@@ -371,9 +384,11 @@ class StartupDialogPresenter:
             min_password_length=self._database_config.min_password_length,
             password_policy_hint="",
             allow_emergency_reset=True,
+            key_file_path=resolved_key_file_path,
             show_mode_selector=False,
             uses_remembered_target=resolved_use_remembered_target,
             remembered_target_is_available=remembered_target_is_available,
+            operator=operator,
             show_target_source_selector=remembered_target_is_available,
             show_dialect_picker=not resolved_use_remembered_target,
             backend_fields=backend_fields,
@@ -447,6 +462,7 @@ class StartupDialogPresenter:
             success=StartupDialogSuccess(
                 repository=result.repository,
                 remembered_target=bootstrap_target,
+                last_operator=normalized_submission.operator,
                 invalidate_access=result.invalidate_access,
                 backend_cleanup=result.backend_cleanup,
             )
@@ -701,6 +717,7 @@ class StartupDialogPresenter:
             mode=submission.mode,
             uses_remembered_target=uses_remembered_target,
             dialect=dialect,
+            operator=submission.operator.strip(),
             database_path=database_path,
             field_values=normalized_field_values,
             backend_fields=backend_fields,

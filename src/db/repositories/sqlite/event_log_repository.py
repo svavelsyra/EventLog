@@ -33,6 +33,12 @@ from src.core.communication_portability import (
     PortableCommunicationQualifier,
     PortableCommunicationSystem,
 )
+from src.core.runtime_user_preferences import (
+    RuntimePreferenceValue,
+    get_runtime_preference_definition,
+    parse_runtime_preference_value,
+    serialize_runtime_preference_value,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -845,6 +851,68 @@ class EventLogRepository(EventLogAdapter, BaseRepository):
             (datetime.now().isoformat(),),
         )
         return [self._row_to_personnel_entry(row) for row in rows]
+
+    def read_runtime_preference(self, key: str) -> RuntimePreferenceValue:
+        """Return one parsed runtime preference value or the approved default."""
+        definition = get_runtime_preference_definition(key)
+
+        try:
+            row = self.adapter.fetchone(
+                "SELECT value FROM user_preferences WHERE key = ?",
+                (definition.key,),
+            )
+        except sqlite3.OperationalError:
+            LOGGER.warning(
+                "Could not read runtime preference %s because the user_preferences table is unavailable; using default.",
+                definition.key,
+            )
+            return definition.clone_default_value()
+
+        if row is None:
+            return definition.clone_default_value()
+
+        raw_value = str(row["value"])
+        try:
+            return parse_runtime_preference_value(definition, raw_value)
+        except ValueError:
+            LOGGER.warning(
+                "Invalid runtime preference %s value %r; using default.",
+                definition.key,
+                raw_value,
+            )
+            return definition.clone_default_value()
+
+    def write_runtime_preference(
+        self,
+        key: str,
+        value: RuntimePreferenceValue,
+    ) -> None:
+        """Persist one runtime preference through the centralized key contract."""
+        definition = get_runtime_preference_definition(key)
+        serialized_value = serialize_runtime_preference_value(definition, value)
+        self.adapter.execute(
+            """
+            INSERT INTO user_preferences (key, value, description, modified_time)
+            VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                description = excluded.description,
+                modified_time = excluded.modified_time
+            """,
+            (definition.key, serialized_value, definition.description),
+        )
+        self._commit_if_needed()
+        self._bind_adapter_state()
+
+    def clear_runtime_preference(self, key: str) -> None:
+        """Remove one stored runtime preference so future reads use the default."""
+        definition = get_runtime_preference_definition(key)
+        self.adapter.execute(
+            "DELETE FROM user_preferences WHERE key = ?",
+            (definition.key,),
+        )
+        self._commit_if_needed()
+        self._bind_adapter_state()
 
     def _get_setting(
         self,

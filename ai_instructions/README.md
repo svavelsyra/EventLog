@@ -6,7 +6,7 @@
 
 ## General Project Understanding
 
-- **`project_context.md`** - Project overview, tech stack, constraints, NO GIT warning, dependency philosophy
+- **`project_context.md`** - Project overview, tech stack, constraints, Git availability, dependency philosophy
 - **`user_stories.md`** - User story framework, versioning, Goal/Limitations/Purpose, splitting guidelines
 
 ---
@@ -80,7 +80,7 @@ Located in `../Demo/`:
 
 ## Key Principles
 
-- **NO GIT** - Changes are permanent
+- **Git is available** - Prefer the approved low-churn Git command family from `ai_memory/behavioral_rules.md`
 - **Offline only** - No network functionality
 - **ZERO third-party app dependencies** - Use Python stdlib
 - **Minimize mocking** - Use in-memory databases for tests

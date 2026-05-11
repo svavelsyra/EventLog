@@ -23,6 +23,7 @@ EXPECTED_TABLES = {
     "event_entries",
     "personnel_entries",
     "settings",
+    "user_preferences",
 }
 
 ENCRYPTION_KEY = bytes.fromhex(

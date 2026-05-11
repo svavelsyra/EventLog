@@ -1,7 +1,7 @@
 # GUI Architecture (AI)
 
 **Layer**: User Interface  
-**Last Updated**: 2026-04-22 (Session 008 - Added responsive design requirements)
+**Last Updated**: 2026-05-07 (Session 100 - Documented startup dialog state/submission seam and seam-growth guardrails)
 
 ## Overview
 GUI layer uses Tkinter with MVP (Model-View-Presenter) pattern for testability.
@@ -32,6 +32,46 @@ GUI layer uses Tkinter with MVP (Model-View-Presenter) pattern for testability.
 - Validate user input (basic UI validation)
 - Call Core layer for business operations
 - Update View based on Core responses
+
+### Startup Dialog Pattern (State-Driven MVP Slice)
+
+The startup dialog is the current reference pattern for a dynamic Tk dialog whose visible fields change as the operator edits inputs.
+
+**Ownership split**:
+- **View** owns Tk widgets, widget variables, layout, focus, and browse-button wiring.
+- **Presenter** owns startup flow decisions, prefill values, dynamic field selection, and recomputed dialog state.
+- **Controller** is a thin Tk/app adapter: it reads one structured submission from the view, calls presenter methods, renders the returned state, and wires app-owned callbacks such as close/reset/browse flows.
+
+**Preferred seam objects**:
+- `StartupDialogState` = presenter → view render contract
+- `StartupDialogSubmission` = view → presenter readback contract
+- backend startup field requirements = persistence → presenter/view technical field contract
+
+**Required interaction loop**:
+1. Controller asks the presenter for state.
+2. View renders that state through `render_state(...)`.
+3. Operator changes something in the dialog.
+4. Controller reads one `StartupDialogSubmission` from `get_submission(...)`.
+5. Presenter recomputes the next `StartupDialogState`.
+6. Controller re-renders the dialog.
+
+**Why this is the preferred pattern**:
+- prefill flows through one render contract instead of special-case setters,
+- user-entered values flow back through one submission contract instead of one getter per field,
+- presenter logic stays the authority for mode/field visibility and remembered-target behavior,
+- the view remains thin even when fields are backend-driven and dynamic.
+
+### Startup Dialog Guardrails
+
+For dynamic dialogs like startup, treat the following as exceptions that require strong justification rather than the default pattern:
+
+- adding one getter/setter per field,
+- adding hidden submission booleans that duplicate field-contract facts,
+- adding one callback-registration method per widget event when a smaller binding seam would do,
+- moving recomputation of visible fields or startup mode into the controller,
+- leaking GUI presentation details such as labels or browse semantics downward into persistence contracts.
+
+The startup dialog may still keep a few field-oriented helper methods where Tk-specific behavior genuinely benefits from that seam, but the architectural default is **render whole state, read whole submission, keep controller thin**.
 
 ### Model (Domain)
 **Location**: `src/core/`

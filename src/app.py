@@ -9,10 +9,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from os import PathLike
 from pathlib import Path
 
-from src.config import DatabaseConfig, load_database_config
+from src.config import (
+    BootstrapUiConfig,
+    CONFIG_TEMPLATE_FILENAME,
+    DatabaseConfig,
+    load_bootstrap_ui_config,
+    load_database_config,
+    save_bootstrap_ui_config,
+    write_config_template,
+)
 from src.config.app_config import BootstrapTargetConfig
 from src.core import (
     ResetAttemptFacts,
@@ -20,6 +29,7 @@ from src.core import (
     ResetFollowUpIssue,
     assemble_reset_report_from_facts,
 )
+from src.core.app_runtime_state import AppRuntimeState
 from src.db.repositories.bootstrap_backend_policy import (
     resolve_runtime_database_config,
     save_bootstrap_target_config,
@@ -43,12 +53,16 @@ from src.security.reset_flow import delete_log_cleanup_targets
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
 ResetCleanup = Callable[[], None]
 
+LOGGER = logging.getLogger(__name__)
+
 ResetFollowUpHint = ResetFollowUpIssue
 MainWindowLifecycleCallback = Callable[[], str | None]
 
 _MAIN_WINDOW_RESET_FAILURE_MESSAGE = "MISSLYCKADES"
 _MAIN_WINDOW_MANUAL_FOLLOW_UP_MESSAGE = "Följ upp manuellt."
 _MAIN_WINDOW_KEY_FILE_ADVISORY = "Eventuella nyckelfiler behöver tas bort manuellt."
+_MAIN_WINDOW_TEMPLATE_WRITTEN_MESSAGE = f"Skrev {CONFIG_TEMPLATE_FILENAME}."
+_MAIN_WINDOW_TEMPLATE_WRITE_FAILED_MESSAGE = f"Kunde inte skriva {CONFIG_TEMPLATE_FILENAME}."
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -110,6 +124,13 @@ def resolve_database_config(config_path: str | PathLike[str] | None = None) -> D
         )
 
     return DatabaseConfig()
+
+
+def resolve_bootstrap_ui_settings(
+    config_path: str | PathLike[str] | None = None,
+) -> BootstrapUiConfig:
+    """Return bootstrap-owned UI/user settings from config.ini or code defaults."""
+    return load_bootstrap_ui_config(_resolve_config_path(config_path))
 
 
 
@@ -282,18 +303,52 @@ def _build_main_window_reset_callback(
 def _build_main_window_close_callback(
     shell: AppShell,
     startup_result: StartupDialogSuccess,
+    *,
+    config_path: str | PathLike[str],
+    bootstrap_ui_config: BootstrapUiConfig,
+    app_runtime_state: AppRuntimeState,
 ) -> MainWindowLifecycleCallback:
     """Return the visible-shell close callback for the active context."""
 
     def close_callback() -> str | None:
         outcome = run_active_context_close(startup_result)
         if not outcome.failure_categories:
+            try:
+                save_bootstrap_ui_config(
+                    config_path,
+                    BootstrapUiConfig(
+                        main_window=shell.snapshot_main_window_config() or bootstrap_ui_config.main_window,
+                        language=bootstrap_ui_config.language,
+                        last_operator=app_runtime_state.active_operator.strip(),
+                    ),
+                )
+            except Exception:
+                LOGGER.warning("Failed to persist bootstrap UI config on close.", exc_info=True)
             shell.close()
             return None
 
         return _MAIN_WINDOW_RESET_FAILURE_MESSAGE
 
     return close_callback
+
+
+def _build_config_template_regeneration_callback(
+    *,
+    config_path: str | PathLike[str],
+) -> MainWindowLifecycleCallback:
+    """Return the visible-shell callback that rewrites the reference config template."""
+
+    def regenerate_template_callback() -> str | None:
+        template_path = _resolve_config_path(config_path).with_name(CONFIG_TEMPLATE_FILENAME)
+        try:
+            write_config_template(template_path)
+        except Exception:
+            LOGGER.warning("Failed to regenerate config.ini.template.", exc_info=True)
+            return _MAIN_WINDOW_TEMPLATE_WRITE_FAILED_MESSAGE
+
+        return _MAIN_WINDOW_TEMPLATE_WRITTEN_MESSAGE
+
+    return regenerate_template_callback
 
 
 
@@ -367,32 +422,46 @@ def run_active_context_reset(
 def run_app(config_path: str | PathLike[str] | None = None) -> StartupDialogSuccess | None:
     """Run startup, show the minimal main window, and return the startup result."""
     resolved_config_path = _resolve_config_path(config_path)
+    bootstrap_ui_settings = resolve_bootstrap_ui_settings(resolved_config_path)
     database_config = resolve_database_config(resolved_config_path)
     shell = AppShell()
     startup_result = shell.run_startup_dialog(
         database_config,
+        last_operator_prefill=bootstrap_ui_settings.last_operator,
         emergency_reset_callback=_build_startup_emergency_reset_callback(
             database_config,
             config_path=resolved_config_path,
         ),
     )
     if startup_result is not None:
+        app_runtime_state = AppRuntimeState(active_operator=startup_result.last_operator)
         try:
             save_bootstrap_target_config(resolved_config_path, startup_result.remembered_target)
         except Exception:
             shell.close()
             raise
-        shell.show_main_window(
-            startup_result,
-            reset_callback=_build_main_window_reset_callback(
+        main_window_callbacks: dict[str, MainWindowLifecycleCallback] = {
+            "template_callback": _build_config_template_regeneration_callback(
+                config_path=resolved_config_path,
+            ),
+            "reset_callback": _build_main_window_reset_callback(
                 shell,
                 startup_result,
                 config_path=resolved_config_path,
             ),
-            close_callback=_build_main_window_close_callback(
+            "close_callback": _build_main_window_close_callback(
                 shell,
                 startup_result,
+                config_path=resolved_config_path,
+                bootstrap_ui_config=bootstrap_ui_settings,
+                app_runtime_state=app_runtime_state,
             ),
+        }
+        shell.show_main_window(
+            startup_result,
+            app_runtime_state=app_runtime_state,
+            window_config=bootstrap_ui_settings.main_window,
+            **main_window_callbacks,
         )
 
     return startup_result

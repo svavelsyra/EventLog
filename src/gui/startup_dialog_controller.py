@@ -20,83 +20,38 @@ from src.core import ResetFollowUpIssue
 from src.db.repositories.startup_selection import PathExists, StartupFieldName
 from src.gui.presenters.startup_dialog_presenter import (
     StartupDialogFailureCode,
-    StartupDialogMode,
     StartupDialogPresenter,
     StartupDialogState,
     StartupDialogSubmission,
     StartupDialogSuccess,
     resolve_startup_mode,
 )
-from src.gui.views.startup_dialog_view import StartupDialogView, VoidCallback
-
-
-class StringVariable(Protocol):
-    """Minimal string-variable contract needed for startup selector state."""
-
-    def get(self) -> str:
-        """Return the current string value."""
-
-    def set(self, value: str) -> None:
-        """Store a new string value."""
-
-
-class BooleanVariable(Protocol):
-    """Minimal boolean-variable contract needed for startup selector state."""
-
-    def get(self) -> bool:
-        """Return the current boolean value."""
-
-    def set(self, value: bool) -> None:
-        """Store a new boolean value."""
+from src.gui.views.startup_dialog_view import (
+    StartupDialogActionCallbacks,
+    StartupDialogView,
+    VoidCallback,
+)
 
 
 class StartupDialogViewProtocol(Protocol):
     """Minimal view contract used by the startup dialog controller."""
 
     window: tk.Misc
-    use_remembered_target_var: BooleanVariable
 
     def render_state(self, state: StartupDialogState) -> None:
         """Render presenter-owned state."""
 
-    def get_submission(self, *, mode: StartupDialogMode) -> StartupDialogSubmission:
+    def get_submission(self) -> StartupDialogSubmission:
         """Return the current startup submission from widget values."""
 
-    def get_field_value(self, field_name: StartupFieldName) -> str:
-        """Return the current text value for one backend-driven field."""
+    def set_submission_changed_callback(self, callback: VoidCallback) -> None:
+        """Register callback for submission-changing UI events."""
 
-    def set_field_value(self, field_name: StartupFieldName, value: str) -> None:
-        """Store a text value for one backend-driven field."""
-
-    def set_submit_callback(self, callback: VoidCallback) -> None:
-        """Register submit callback."""
-
-    def set_cancel_callback(self, callback: VoidCallback) -> None:
-        """Register cancel callback."""
-
-    def set_migrate_callback(self, callback: VoidCallback) -> None:
-        """Register migrate callback."""
-
-    def set_emergency_reset_callback(self, callback: VoidCallback) -> None:
-        """Register emergency-reset callback."""
-
-    def set_browse_database_callback(self, callback: VoidCallback) -> None:
-        """Register browse-database callback."""
-
-    def set_browse_key_file_callback(self, callback: VoidCallback) -> None:
-        """Register browse-key-file callback."""
-
-    def set_database_path_changed_callback(self, callback: VoidCallback) -> None:
-        """Register manual database-path edit callback."""
-
-    def set_mode_changed_callback(self, callback: VoidCallback) -> None:
-        """Register mode-selector callback."""
-
-    def set_target_source_changed_callback(self, callback: VoidCallback) -> None:
-        """Register target-source-selector callback."""
-
-    def set_dialect_changed_callback(self, callback: VoidCallback) -> None:
-        """Register technology-selector callback."""
+    def set_action_callbacks(
+        self,
+        callbacks: StartupDialogActionCallbacks,
+    ) -> None:
+        """Register action-oriented UI callbacks."""
 
     def set_error_message(self, message: str) -> None:
         """Display an error message in the dialog."""
@@ -172,6 +127,9 @@ def database_path_exists(database_path: str | PathLike[str]) -> bool:
     return Path(database_path).exists()
 
 
+DEFAULT_DATABASE_PATH_EXISTS: DatabasePathExists = database_path_exists
+
+
 def open_database_path_dialog(parent: tk.Misc) -> str:
     """Open a database-path picker that supports both existing and new targets."""
     return filedialog.asksaveasfilename(
@@ -195,11 +153,12 @@ class StartupDialogController:
         self,
         database_config: DatabaseConfig,
         *,
+        last_operator_prefill: str = "",
         presenter: StartupDialogPresenter | None = None,
         view_factory: ViewFactory = StartupDialogView,
         database_path_dialog_opener: DatabasePathDialogOpener = open_database_path_dialog,
         key_file_dialog_opener: KeyFileDialogOpener = open_key_file_dialog,
-        database_path_exists: DatabasePathExists = database_path_exists,
+        database_path_exists: DatabasePathExists = DEFAULT_DATABASE_PATH_EXISTS,
         emergency_reset_callback: EmergencyResetCallback | None = None,
     ) -> None:
         self._presenter = presenter or StartupDialogPresenter(
@@ -208,16 +167,16 @@ class StartupDialogController:
                 dialect,
                 database_path,
                 fallback_mode,
-                path_exists=cast(PathExists, database_path_exists),
+                path_exists=database_path_exists,
             ),
         )
         self._view_factory = view_factory
         self._database_path_dialog_opener = database_path_dialog_opener
         self._key_file_dialog_opener = key_file_dialog_opener
         self._emergency_reset_callback = emergency_reset_callback
+        self._last_operator_prefill = last_operator_prefill.strip()
 
         self._view: StartupDialogViewProtocol | None = None
-        self._active_mode: StartupDialogMode | None = None
         self._result: StartupDialogSuccess | None = None
         self._pending_migration_submission: StartupDialogSubmission | None = None
         self._migration_running = False
@@ -231,39 +190,41 @@ class StartupDialogController:
             self._view = view
             self._wire_callbacks(view)
 
-            initial_state = self._presenter.get_initial_state()
-            self._active_mode = initial_state.mode
+            initial_state = self._presenter.get_initial_state(operator=self._last_operator_prefill)
             view.render_state(self._prepare_state_for_view(initial_state))
             view.clear_error_message()
             view.focus_primary_input()
             root.wait_window(view.window)
             return self._result
         finally:
-            self._active_mode = None
             self._view = None
 
     def _wire_callbacks(self, view: StartupDialogViewProtocol) -> None:
-        view.set_submit_callback(self._handle_submit)
-        view.set_cancel_callback(self._handle_cancel)
-        view.set_migrate_callback(self._handle_migrate)
-        view.set_browse_database_callback(self._handle_browse_database)
-        view.set_browse_key_file_callback(self._handle_browse_key_file)
-        view.set_database_path_changed_callback(self._handle_database_path_changed)
-        view.set_target_source_changed_callback(self._handle_target_source_changed)
-        view.set_dialect_changed_callback(self._handle_dialect_changed)
+        view.set_action_callbacks(
+            StartupDialogActionCallbacks(
+                submit=self._handle_submit,
+                cancel=self._handle_cancel,
+                migrate=self._handle_migrate,
+                browse_database=self._handle_browse_database,
+                browse_key_file=self._handle_browse_key_file,
+                emergency_reset=(
+                    self._handle_emergency_reset
+                    if self._emergency_reset_callback is not None
+                    else None
+                ),
+            )
+        )
+        view.set_submission_changed_callback(self._handle_submission_changed)
 
-        if self._emergency_reset_callback is not None:
-            view.set_emergency_reset_callback(self._handle_emergency_reset)
 
     def _handle_submit(self) -> None:
         view = self._require_view()
-        active_mode = self._require_active_mode()
 
         self._pending_migration_submission = None
         self._migration_running = False
         view.clear_status_message()
         view.clear_error_message()
-        submission = view.get_submission(mode=active_mode)
+        submission = view.get_submission()
         result = self._presenter.submit(submission)
 
         if result.success is not None:
@@ -280,7 +241,6 @@ class StartupDialogController:
         if failure.code is StartupDialogFailureCode.MIGRATION_NEEDED:
             self._pending_migration_submission = submission
             updated_state = self._presenter.recompute_state(submission)
-            self._active_mode = updated_state.mode
             view.render_state(self._prepare_state_for_view(updated_state))
         view.set_error_message(failure.message)
         if failure.should_clear_password:
@@ -291,17 +251,15 @@ class StartupDialogController:
 
     def _handle_migrate(self) -> None:
         view = self._require_view()
-        active_mode = self._require_active_mode()
         pending_submission = self._pending_migration_submission
         if pending_submission is None:
             return
 
-        current_submission = view.get_submission(mode=active_mode)
+        current_submission = view.get_submission()
         self._migration_running = True
         view.clear_error_message()
         view.clear_status_message()
         running_state = self._presenter.recompute_state(current_submission)
-        self._active_mode = running_state.mode
         view.render_state(self._prepare_state_for_view(running_state))
 
         try:
@@ -310,7 +268,6 @@ class StartupDialogController:
             self._migration_running = False
 
         updated_state = self._presenter.recompute_state(current_submission)
-        self._active_mode = updated_state.mode
         self._pending_migration_submission = None
         view.render_state(self._prepare_state_for_view(updated_state))
 
@@ -338,23 +295,22 @@ class StartupDialogController:
         if not selected_path:
             return
 
-        view.use_remembered_target_var.set(False)
-        view.set_field_value(StartupFieldName.DATABASE_PATH, selected_path)
-        self._render_state_from_view()
+        self._render_current_submission_with_updates(
+            field_updates={StartupFieldName.DATABASE_PATH: selected_path},
+            uses_remembered_target=False,
+        )
 
     def _handle_browse_key_file(self) -> None:
         view = self._require_view()
         selected_path = self._key_file_dialog_opener(view.window)
-        if selected_path:
-            view.set_field_value(StartupFieldName.KEY_FILE_PATH, selected_path)
+        if not selected_path:
+            return
 
-    def _handle_database_path_changed(self) -> None:
-        self._render_state_from_view()
+        self._render_current_submission_with_updates(
+            field_updates={StartupFieldName.KEY_FILE_PATH: selected_path},
+        )
 
-    def _handle_target_source_changed(self) -> None:
-        self._render_state_from_view()
-
-    def _handle_dialect_changed(self) -> None:
+    def _handle_submission_changed(self) -> None:
         self._render_state_from_view()
 
     def _handle_emergency_reset(self) -> None:
@@ -389,21 +345,44 @@ class StartupDialogController:
 
         return self._view
 
-    def _require_active_mode(self) -> StartupDialogMode:
-        if self._active_mode is None:
-            raise RuntimeError("Startup dialog mode is not available.")
-
-        return self._active_mode
-
     def _render_state_from_view(
         self,
     ) -> None:
+        self._render_current_submission_with_updates()
+
+    def _render_current_submission_with_updates(
+        self,
+        *,
+        field_updates: dict[StartupFieldName, str] | None = None,
+        uses_remembered_target: bool | None = None,
+    ) -> None:
+        view = self._require_view()
+        current_submission = view.get_submission()
+        if field_updates is None and uses_remembered_target is None:
+            self._render_state_from_submission(current_submission)
+            return
+
+        updated_field_values = dict(current_submission.field_values)
+        if field_updates is not None:
+            updated_field_values.update(field_updates)
+        resolved_uses_remembered_target = cast(bool, current_submission.uses_remembered_target)
+        if uses_remembered_target is not None:
+            resolved_uses_remembered_target = cast(bool, uses_remembered_target)
+        updated_submission = StartupDialogSubmission(
+            mode=current_submission.mode,
+            dialect=current_submission.dialect,
+            operator=current_submission.operator,
+            uses_remembered_target=resolved_uses_remembered_target,
+            field_values=updated_field_values,
+        )
+
+        self._render_state_from_submission(updated_submission)
+
+    def _render_state_from_submission(self, submission: StartupDialogSubmission) -> None:
         view = self._require_view()
         self._pending_migration_submission = None
         self._migration_running = False
-        current_submission = view.get_submission(mode=self._active_mode or StartupDialogMode.CREATE)
-        updated_state = self._presenter.recompute_state(current_submission)
-        self._active_mode = updated_state.mode
+        updated_state = self._presenter.recompute_state(submission)
         view.render_state(self._prepare_state_for_view(updated_state))
         view.clear_error_message()
         view.clear_status_message()

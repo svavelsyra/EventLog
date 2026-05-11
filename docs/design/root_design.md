@@ -2,7 +2,7 @@
 
 **Project**: Platoon Event Logger  
 **Version**: 1.0.0
-**Last Updated**: 2026-05-05  
+**Last Updated**: 2026-05-07  
 
 ## Domain Model
 
@@ -69,6 +69,9 @@ The application is no longer designed around one generic message-log entry. The 
 - Startup must always reach a usable recovery-capable create/select flow, even when remembered bootstrap values are missing or malformed.
 - Startup is technology-first: the user resolves or selects the database technology before backend-specific input fields are finalized.
 - After a technology is selected, the startup UI becomes dynamic and shows only the fields relevant for that technology.
+- The startup presenter owns those dynamic decisions and may recompute the dialog repeatedly as the operator changes selections or paths.
+- The startup view should therefore be driven by a whole-dialog render contract and a structured readback contract, rather than one getter/setter per startup field.
+- Remembered values and presenter-owned defaults should enter the UI through the rendered startup state, while current operator-entered values should be read back through one submission object.
 - In the current SQLite realization, create versus open is inferred from whether the selected target already exists, so the generic startup shell should not expose a separate global new/load selector.
 - Remembered values may prefill the startup UI, but the user must be able to change them or ignore them.
 - Current SQLite/file-path/key-file behavior is a Phase 1 realization of this UX, not the universal rule for all future backends.

@@ -1,7 +1,7 @@
 # Database Architecture (AI)
 
 **Layer**: Data Access  
-**Last Updated**: 2026-05-04 (Session 064 - Documented technical-only startup requirement seam)
+**Last Updated**: 2026-05-07 (Session 100 - Clarified startup field-contract boundary versus GUI state ownership)
 
 ## Overview
 Database layer provides data persistence through a clear split between low-level database adapters and higher-level repositories. SQLite is the current concrete dialect, but the architecture is still shaped so additional backends can be introduced later without rewriting higher layers.
@@ -76,6 +76,9 @@ The generic bootstrap phases are:
 - Persistence/startup seams must not carry presenter-flavored labels, browse-button actions, or other GUI presentation metadata.
 - GUI code may derive labels, browse-button wiring, and other display behavior from the stable field identities without reintroducing backend-specific branching.
 - The current ownership seam for those backend startup facts is `src/db/repositories/bootstrap_backend_policy.py`; shared startup field/profile types may still live separately, but the policy decisions themselves should not be split back across app wiring, factory helpers, and ad-hoc wrapper modules.
+- Persistence does **not** own when the dialog re-renders, how remembered values are shown, or how operator-entered values are read back during interaction.
+- Those higher-level interaction concerns belong to the presenter/controller/view loop, which should exchange whole startup state and structured submissions rather than inventing new persistence-facing field accessors.
+- If future startup UI needs another display label, hint, browse action, or focus rule, add it in GUI-owned state/design layers unless the requirement is truly a backend capability fact.
 
 ### Do Not Hardcode SQLite Assumptions into Bootstrap
 

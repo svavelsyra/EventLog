@@ -59,7 +59,7 @@ pip install -r requirements-test.txt
 
 ### Run Tests
 ```bash
-pytest
+python -m pytest
 ```
 
 ## Documentation
@@ -71,11 +71,13 @@ pytest
 - **All Documentation**: `docs/` folder
 
 ### For AI Assistants
-- **Start Here**: `.ai/instructions.md` (main AI entry point)
-- AI-specific files are in `.ai/`, `ai_instructions/`, `ai_memory/`, and `session_logs/`
+- **Start Here**: `.github/copilot-instructions.md` (main AI entry point)
+- AI-specific files are in `.github/`, `ai_instructions/`, `ai_memory/`, and `session_logs/`
 
 ## Important Notes
-⚠️ **This project has NO GIT repository** - changes cannot be reverted. Please be careful when modifying files.
+
+- Git is available in the workspace for normal version-control inspection.
+- AI assistants should prefer the small approved Git command family documented in `.github/copilot-instructions.md` and `ai_memory/behavioral_rules.md`.
 
 This project is designed to run completely offline on a single computer.
 

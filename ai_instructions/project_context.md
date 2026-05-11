@@ -9,18 +9,16 @@
 **Name**: EventLog (formerly MessageLog)  
 **Type**: Desktop application for platoon staff event logging  
 **Purpose**: Log radio communications, operational events, personnel tracking  
-**Environment**: Offline only, single computer, NO GIT
+**Environment**: Offline only, single computer, Git available in workspace
 
 ---
 
 ## Critical Constraints
 
-### NO GIT Repository ⚠️
-- **Changes are permanent** - cannot revert
-- Be extra careful before editing
-- Always read files before modifying
-- Validate changes after editing
-- Think before acting
+### Git Availability
+- Git is available in the workspace.
+- Prefer the approved low-churn Git command family from `ai_memory/behavioral_rules.md` instead of inventing new Git command variants.
+- Even with Git available, still read files before modifying, validate changes after editing, and think before acting.
 
 ### Offline Only
 - No internet connectivity
@@ -248,7 +246,7 @@ tests/
 
 ## Remember
 
-- **NO GIT** - Changes are permanent!
+- **Git is available** - Prefer the approved low-churn Git command family
 - **Offline only** - No network functionality
 - **ZERO third-party dependencies** for app
 - **Minimize mocking** in tests
