@@ -2,7 +2,7 @@
 
 **Purpose**: Business logic patterns, validation lessons, and implementation pitfalls learned during core development.
 
-**Last Updated**: 2026-05-11 (Session 106 - Simplified app-owned runtime state shape for active operator)
+**Last Updated**: 2026-05-13 (Session 121 - Communication template should teach the contract with valid example systems)
 
 ## Session 081 - Communication Model Should Be Recursive Under a Top-Level System
 
@@ -37,6 +37,14 @@
   - let the running app/shell keep that live value in memory
   - strip at persistence boundaries such as saving `last_operator` back to `config.ini`
 - If a second real app-owned runtime value appears later, extend the same runtime-state holder rather than creating another single-purpose context object by default.
+
+## Session 119 - Communication Config JSON File Flows Must Reuse the Approved Portability Contract
+
+- Do not invent a second ad hoc JSON shape for Communication config files once `src/core/communication_portability.py` already defines the approved import/export contract.
+- If the app needs editable starter output, canonical export text, or file-based import, build those helpers on top of the existing portability payload validator/parser so template generation, export, and import all stay on one contract.
+- When the generated file is meant to be edited by a human, prefer a valid starter bundle with a few representative example systems/options/qualifiers over an entirely empty skeleton; the template should demonstrate the approved shape, not force the user to reverse-engineer it.
+- For the current shell behavior, the existing template action should regenerate both the code-owned starter file `communication_config.template.json` and a live runtime export `communication_config.export.json` alongside `config.ini.template`.
+- Keep the database as the live runtime authority after import; JSON files are for template generation, export, and explicit import, not presenter-local runtime state.
 
 ## Expected Content Areas
 

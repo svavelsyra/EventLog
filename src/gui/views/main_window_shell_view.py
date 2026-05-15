@@ -8,15 +8,20 @@ workflows, destructive actions, and richer status behavior remain later stories.
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 from src.config import MainWindowConfig
 from src.core.app_runtime_state import AppRuntimeState
+from src.gui.status_bar_handler import StatusBarHandler
+
+from .communication_tab_view import CommunicationTabView
 
 
 ShellActionCallback = Callable[[], str | None]
+ShellPathActionCallback = Callable[[str], str | None]
 
 
 class MainWindowShellView:
@@ -29,23 +34,66 @@ class MainWindowShellView:
         root: tk.Tk,
         app_runtime_state: AppRuntimeState,
         *,
-        window_config: MainWindowConfig | None = None,
-        template_callback: ShellActionCallback | None = None,
+        window_config: MainWindowConfig,
+        status_bar_log_level: str,
+        app_config_template_callback: ShellPathActionCallback | None = None,
+        communication_template_callback: ShellPathActionCallback | None = None,
+        communication_export_callback: ShellPathActionCallback | None = None,
+        communication_import_callback: ShellPathActionCallback | None = None,
         reset_callback: ShellActionCallback | None = None,
         close_callback: ShellActionCallback | None = None,
     ) -> None:
         self.root = root
         self.app_runtime_state = app_runtime_state
-        self._window_config = window_config or MainWindowConfig()
-        self._template_callback = template_callback
+        self._disposed = False
+        self._destroyed = False
+        self._window_config = window_config
+        self._app_config_template_callback = app_config_template_callback
+        self._communication_template_callback = communication_template_callback
+        self._communication_export_callback = communication_export_callback
+        self._communication_import_callback = communication_import_callback
         self._reset_callback = reset_callback
         self._close_callback = close_callback
         self.root.title("EventLog - Pluton Event Logger")
         self.menu_bar = tk.Menu(self.root)
         self.tools_menu = tk.Menu(self.menu_bar, tearoff=False)
         self.tools_menu.add_command(
-            label="Skriv configmall",
-            command=self.handle_template_requested,
+            label="Skriv app-configmall",
+            command=lambda: self._run_file_save_action(
+                title="Spara app-configmall som",
+                defaultextension=".ini",
+                filetypes=(("INI-filer", "*.ini"), ("Alla filer", "*.*")),
+                initialfile="config.ini.template",
+                callback=self._app_config_template_callback,
+            ),
+        )
+        self.tools_menu.add_command(
+            label="Skriv kommunikationsmall",
+            command=lambda: self._run_file_save_action(
+                title="Spara kommunikationsmall som",
+                defaultextension=".json",
+                filetypes=(("JSON-filer", "*.json"), ("Alla filer", "*.*")),
+                initialfile="communication_config.template.json",
+                callback=self._communication_template_callback,
+            ),
+        )
+        self.tools_menu.add_command(
+            label="Exportera kommunikationskonfiguration",
+            command=lambda: self._run_file_save_action(
+                title="Exportera kommunikationskonfiguration som",
+                defaultextension=".json",
+                filetypes=(("JSON-filer", "*.json"), ("Alla filer", "*.*")),
+                initialfile="communication_config.export.json",
+                callback=self._communication_export_callback,
+            ),
+        )
+        self.tools_menu.add_command(
+            label="Importera kommunikationskonfiguration",
+            command=lambda: self._run_file_open_action(
+                title="Importera kommunikationskonfiguration",
+                filetypes=(("JSON-filer", "*.json"), ("Alla filer", "*.*")),
+                callback=self._communication_import_callback,
+            ),
         )
         self.menu_bar.add_cascade(label="Verktyg", menu=self.tools_menu)
         self.root.configure(menu=self.menu_bar)
@@ -90,12 +138,7 @@ class MainWindowShellView:
 
         self.tab_hosts: dict[str, ttk.Frame] = {}
         self.placeholder_labels: dict[str, ttk.Label] = {}
-        self._build_placeholder_tab(
-            key="communication",
-            tab_text="Kommunikation",
-            heading_text="Kommunikation",
-            placeholder_text="Platshållare för kommande kommunikationsflöde.",
-        )
+        self.communication_tab_view = self._build_communication_tab()
         self._build_placeholder_tab(
             key="event",
             tab_text="Händelser",
@@ -118,6 +161,12 @@ class MainWindowShellView:
             anchor="w",
         )
         self.status_label.grid(row=0, column=0, sticky=tk.W)
+        self._status_logger = logging.getLogger()
+        self._status_bar_handler = StatusBarHandler(
+            self.set_status_message,
+            level=self._resolve_status_bar_log_level(status_bar_log_level),
+        )
+        self._status_logger.addHandler(self._status_bar_handler)
         self.root.protocol("WM_DELETE_WINDOW", self.handle_close_requested)
 
     def set_status_message(self, message: str) -> None:
@@ -127,10 +176,6 @@ class MainWindowShellView:
     def handle_reset_requested(self) -> None:
         """Trigger the app-owned destructive reset callback when available."""
         self._run_shell_action(self._reset_callback)
-
-    def handle_template_requested(self) -> None:
-        """Trigger the app-owned config-template regeneration callback when available."""
-        self._run_shell_action(self._template_callback)
 
     def handle_close_requested(self) -> None:
         """Trigger the app-owned close callback when available."""
@@ -151,6 +196,38 @@ class MainWindowShellView:
             window_x=max(0, self.root.winfo_x()),
             window_y=max(0, self.root.winfo_y()),
         )
+
+    def dispose(self) -> None:
+        """Detach shell-owned logging hooks before the window is destroyed."""
+        if self._disposed:
+            return
+
+        self._status_logger.removeHandler(self._status_bar_handler)
+        self._status_bar_handler.close()
+        self._disposed = True
+
+    def destroy(self) -> None:
+        """Dispose root-hosted shell widgets so startup can safely reuse the Tk root."""
+        if self._destroyed:
+            return
+
+        self.dispose()
+
+        try:
+            self.root.configure(menu=tk.Menu(self.root, tearoff=False))
+        except tk.TclError:
+            pass
+
+        try:
+            self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+        except tk.TclError:
+            pass
+
+        self._destroy_widget(self.status_frame)
+        self._destroy_widget(self.notebook)
+        self._destroy_widget(self.toolbar_frame)
+        self._destroy_widget(self.menu_bar)
+        self._destroyed = True
 
     def _build_placeholder_tab(
         self,
@@ -178,6 +255,12 @@ class MainWindowShellView:
         self.tab_hosts[key] = tab_frame
         self.placeholder_labels[key] = placeholder_label
 
+    def _build_communication_tab(self) -> CommunicationTabView:
+        communication_tab_view = CommunicationTabView(self.notebook)
+        self.notebook.add(communication_tab_view.frame, text="Kommunikation")
+        self.tab_hosts["communication"] = communication_tab_view.frame
+        return communication_tab_view
+
     def _run_shell_action(self, callback: ShellActionCallback | None) -> None:
         if callback is None:
             return
@@ -185,6 +268,62 @@ class MainWindowShellView:
         status_message = callback()
         if status_message is not None:
             self.set_status_message(status_message)
+
+    def _run_file_save_action(
+        self,
+        *,
+        title: str,
+        defaultextension: str,
+        filetypes: tuple[tuple[str, str], ...],
+        initialfile: str,
+        callback: ShellPathActionCallback | None,
+    ) -> None:
+        if callback is None:
+            return
+
+        selected_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title=title,
+            defaultextension=defaultextension,
+            filetypes=filetypes,
+            initialfile=initialfile,
+        )
+        if not selected_path:
+            return
+
+        status_message = callback(selected_path)
+        if status_message is not None:
+            self.set_status_message(status_message)
+
+    def _run_file_open_action(
+        self,
+        *,
+        title: str,
+        filetypes: tuple[tuple[str, str], ...],
+        callback: ShellPathActionCallback | None,
+    ) -> None:
+        if callback is None:
+            return
+
+        selected_path = filedialog.askopenfilename(
+            parent=self.root,
+            title=title,
+            filetypes=filetypes,
+        )
+        if not selected_path:
+            return
+
+        status_message = callback(selected_path)
+        if status_message is not None:
+            self.set_status_message(status_message)
+
+    @staticmethod
+    def _resolve_status_bar_log_level(level_name: str) -> int:
+        normalized_level_name = level_name.strip().upper()
+        resolved_level = logging.getLevelNamesMapping().get(normalized_level_name)
+        if isinstance(resolved_level, int):
+            return resolved_level
+        return logging.WARNING
 
     def _apply_window_config(self, window_config: MainWindowConfig) -> None:
         screen_width = max(1, self.root.winfo_screenwidth())
@@ -206,6 +345,14 @@ class MainWindowShellView:
             )
         except tk.TclError:
             self.root.state("normal")
+
+    @staticmethod
+    def _destroy_widget(widget: tk.Misc) -> None:
+        try:
+            if widget.winfo_exists():
+                widget.destroy()
+        except tk.TclError:
+            pass
 
 
 __all__ = ["MainWindowShellView"]

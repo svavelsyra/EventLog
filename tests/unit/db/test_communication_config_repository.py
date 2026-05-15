@@ -22,14 +22,16 @@ def test_get_active_communication_system_configs_returns_seeded_phase_1_defaults
         "RA180",
         "Motorola",
         "Rakel",
-        "Courier",
+        "Kurir",
+        "Telefon",
     ]
 
     ra180 = configs[0]
-    courier = configs[-1]
+    kurir = configs[3]
+    telefon = configs[-1]
 
     assert ra180.system_type == "Radio System"
-    assert ra180.child_label == "Channel"
+    assert ra180.child_label == "Kanal"
     assert [option.option_value for option in ra180.options] == [
         "1",
         "2",
@@ -41,26 +43,31 @@ def test_get_active_communication_system_configs_returns_seeded_phase_1_defaults
         "8",
     ]
     assert [option.option_label for option in ra180.options[:2]] == [
-        "Channel 1",
-        "Channel 2",
+        "Kanal 1",
+        "Kanal 2",
     ]
     assert ra180.options[0].children == ()
     assert [(qualifier.qualifier_key, qualifier.default_value) for qualifier in ra180.qualifiers] == [
-        ("data", False),
-        ("encrypted", False),
+        ("data", True),
+        ("encrypted", True),
     ]
     assert [qualifier.visibility_mode for qualifier in ra180.qualifiers] == [
         "editable",
         "editable",
     ]
 
-    assert courier.system_type == "Courier"
-    assert courier.child_label is None
-    assert courier.options == ()
-    assert len(courier.qualifiers) == 1
-    assert courier.qualifiers[0].qualifier_key == "encrypted"
-    assert courier.qualifiers[0].default_value is False
-    assert courier.qualifiers[0].visibility_mode == "hidden"
+    assert kurir.system_type == "Kurir"
+    assert kurir.child_label == "Skydd"
+    assert [option.option_value for option in kurir.options] == ["KLAR", "TTA"]
+    assert kurir.qualifiers == ()
+
+    assert telefon.system_type == "Telefon"
+    assert telefon.child_label is None
+    assert telefon.options == ()
+    assert [(qualifier.qualifier_key, qualifier.default_value) for qualifier in telefon.qualifiers] == [
+        ("data", False),
+        ("encrypted", False),
+    ]
 
 
 def test_get_active_communication_system_config_builds_recursive_options_and_filters_inactive_rows(
@@ -122,7 +129,7 @@ def test_get_active_communication_system_config_builds_recursive_options_and_fil
     active_configs = repository.get_active_communication_system_configs()
     ra180 = repository.get_active_communication_system_config("RA180")
 
-    assert [config.system_name for config in active_configs] == ["RA180", "Rakel", "Courier"]
+    assert [config.system_name for config in active_configs] == ["RA180", "Rakel", "Kurir", "Telefon"]
     assert repository.get_active_communication_system_config("Motorola") is None
     assert repository.get_active_communication_system_config("Missing") is None
     assert ra180 is not None
@@ -166,28 +173,27 @@ def test_get_active_communication_system_config_parses_json_valid_values_and_def
         )
         """,
         (
-            "Courier",
+            "Kurir",
             "delivery_mode",
             "Leveranssätt",
             "enum",
             '["oral", "written"]',
             "written",
-            "How the courier delivered the message.",
+            "How the kurir delivered the message.",
             "editable",
         ),
     )
     repository.connection.commit()
 
-    courier = repository.get_active_communication_system_config("Courier")
+    kurir = repository.get_active_communication_system_config("Kurir")
 
-    assert courier is not None
-    assert [(qualifier.qualifier_key, qualifier.default_value) for qualifier in courier.qualifiers] == [
+    assert kurir is not None
+    assert [(qualifier.qualifier_key, qualifier.default_value) for qualifier in kurir.qualifiers] == [
         ("delivery_mode", "written"),
-        ("encrypted", False),
     ]
-    delivery_mode = courier.qualifiers[0]
+    delivery_mode = kurir.qualifiers[0]
     assert delivery_mode.valid_values == ("oral", "written")
-    assert delivery_mode.help_text == "How the courier delivered the message."
+    assert delivery_mode.help_text == "How the kurir delivered the message."
 
 
 def test_add_communication_option_supports_create_duplicate_and_reactivate_flow(

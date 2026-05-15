@@ -8,6 +8,7 @@ readiness and repository CRUD behavior stay in their existing layers.
 
 from __future__ import annotations
 
+import os.path
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from os import PathLike
@@ -19,7 +20,6 @@ from src.db.database_adapter import BackendCleanupMetadata, WrongDatabaseAdapter
 from src.db.repositories.base_repository import BaseRepository
 from src.db.repositories.sqlite.event_log_repository import EventLogRepository
 from src.db.repositories.startup_selection import (
-    PathExists,
     StartupFieldKind,
     StartupFieldName,
     StartupFieldRequirement,
@@ -33,7 +33,7 @@ from src.db.sqlite_key_preparer import prepare_sqlite_encryption_key
 
 BackendKeyPreparer = Callable[[str, bytes | None, DatabaseCreationDefaults], bytes | None]
 StartupFieldResolver = Callable[[str, bool, bool], tuple[StartupFieldRequirement, ...]]
-StartupModeResolver = Callable[[str, str, PathExists], str]
+StartupModeResolver = Callable[[str, str], str]
 RuntimeConfigResolver = Callable[[DatabaseConfig, str | PathLike[str]], DatabaseConfig]
 OptionSerializer = Callable[[BootstrapTargetConfig], Mapping[str, str]]
 CleanupMetadataResolver = Callable[[str | PathLike[str]], BackendCleanupMetadata]
@@ -61,6 +61,15 @@ class BootstrapBackendPolicy:
     repository_creator: RepositoryCreator | None = None
     database_migrator: DatabaseMigrator | None = None
     supports_external_key_file_advisory: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedStartupSelection:
+    """Backend-owned normalized startup target selection facts for the presenter."""
+
+    dialect: str
+    database_path: str
+    target_locked: bool = False
 
 
 _SQLITE_STARTUP_PROFILE = StartupSelectionProfile(
@@ -132,11 +141,10 @@ def _build_sqlite_startup_fields(
 def _infer_sqlite_startup_mode(
     database_path: str,
     _fallback_mode: str,
-    path_exists: PathExists,
 ) -> str:
     """Return SQLite-owned startup mode for the selected target path."""
     normalized_database_path = database_path.strip()
-    if normalized_database_path and path_exists(normalized_database_path):
+    if normalized_database_path and os.path.exists(normalized_database_path):
         return _STARTUP_MODE_UNLOCK
 
     return _STARTUP_MODE_CREATE
@@ -216,19 +224,51 @@ def resolve_startup_key_preparer(dialect: str) -> BackendKeyPreparer | None:
     return policy.key_preparer
 
 
+def resolve_effective_startup_selection(
+    database_config: DatabaseConfig,
+    *,
+    submitted_dialect: str,
+    submitted_database_path: str,
+    uses_remembered_target: bool,
+) -> ResolvedStartupSelection:
+    """Return backend-owned effective startup target details for the current selection."""
+    normalized_submitted_dialect = _normalize_dialect(submitted_dialect)
+    normalized_submitted_database_path = str(submitted_database_path).strip()
+    configured_target = database_config.bootstrap_target
+    configured_dialect = _normalize_dialect(configured_target.dialect)
+    configured_database_path = str(configured_target.database_path).strip()
+    target_locked = (
+        configured_dialect == SQLITE_DIALECT
+        and bool(configured_database_path)
+        and normalized_submitted_dialect == configured_dialect
+    )
+
+    if target_locked or uses_remembered_target:
+        return ResolvedStartupSelection(
+            dialect=configured_dialect,
+            database_path=configured_database_path,
+            target_locked=target_locked,
+        )
+
+    return ResolvedStartupSelection(
+        dialect=normalized_submitted_dialect,
+        database_path=normalized_submitted_database_path,
+        target_locked=False,
+    )
+
+
 def infer_startup_mode_for_selection(
     *,
     dialect: str,
     database_path: str,
     fallback_mode: str,
-    path_exists: PathExists,
 ) -> str:
     """Return the backend-owned startup mode for the selected target details."""
     policy = resolve_bootstrap_backend_policy(dialect)
     if policy is None or policy.startup_mode_resolver is None:
         return fallback_mode
 
-    return policy.startup_mode_resolver(database_path, fallback_mode, path_exists)
+    return policy.startup_mode_resolver(database_path, fallback_mode)
 
 
 def resolve_backend_startup_fields(
@@ -244,6 +284,38 @@ def resolve_backend_startup_fields(
         return ()
 
     return policy.startup_field_resolver(mode, uses_remembered_target, require_key_file)
+
+
+def project_backend_startup_fields_for_selection(
+    dialect: str,
+    *,
+    mode: str,
+    database_path: str,
+    target_locked: bool,
+    backend_fields: tuple[StartupFieldRequirement, ...],
+) -> tuple[StartupFieldRequirement, ...]:
+    """Return backend-owned startup fields projected for the effective selection state."""
+    normalized_dialect = _normalize_dialect(dialect)
+    normalized_database_path = str(database_path).strip()
+
+    if normalized_dialect != SQLITE_DIALECT:
+        return backend_fields
+
+    if target_locked:
+        return tuple(
+            field
+            for field in backend_fields
+            if field.field_name is not StartupFieldName.DATABASE_PATH
+        )
+
+    if mode == _STARTUP_MODE_CREATE and not normalized_database_path:
+        return tuple(
+            field
+            for field in backend_fields
+            if field.field_name is StartupFieldName.DATABASE_PATH
+        )
+
+    return backend_fields
 
 
 def is_supported_repository_dialect(dialect: str) -> bool:
@@ -350,14 +422,17 @@ def migrate_event_log_database(
 __all__ = [
     "BackendKeyPreparer",
     "BootstrapBackendPolicy",
+    "ResolvedStartupSelection",
     "SQLITE_DIALECT",
     "create_event_log_repository",
     "get_remembered_target_cleanup_metadata",
     "infer_startup_mode_for_selection",
     "is_supported_repository_dialect",
     "migrate_event_log_database",
+    "project_backend_startup_fields_for_selection",
     "resolve_backend_startup_fields",
     "resolve_bootstrap_backend_policy",
+    "resolve_effective_startup_selection",
     "resolve_runtime_database_config",
     "resolve_startup_key_preparer",
     "resolve_startup_selection_profile",

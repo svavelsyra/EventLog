@@ -1,0 +1,85 @@
+{
+  "bundle_kind": "eventlog.communication_config",
+  "bundle_version": 1,
+  "portable_domains": [
+    "communication_systems",
+    "communication_options",
+    "communication_qualifiers"
+  ],
+  "communication_systems": [
+    {
+      "system_name": "Fälttelefon Test",
+      "system_type": "Telefon",
+      "child_label": "Linje",
+      "sort_order": 10,
+      "options": [
+        {
+          "option_value": "LINE_A",
+          "option_label": "Linje A",
+          "child_label": "Reservväg",
+          "sort_order": 10,
+          "children": [
+            {
+              "option_value": "ALT",
+              "option_label": "Alternativ väg",
+              "child_label": null,
+              "sort_order": 10,
+              "children": []
+            }
+          ]
+        },
+        {
+          "option_value": "LINE_B",
+          "option_label": "Linje B",
+          "child_label": null,
+          "sort_order": 20,
+          "children": []
+        }
+      ],
+      "qualifiers": [
+        {
+          "qualifier_key": "encrypted",
+          "label": "Krypterad",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": false,
+          "help_text": "Markera om samtalet gick i skyddad förbindelse.",
+          "visibility_mode": "editable"
+        },
+        {
+          "qualifier_key": "data",
+          "label": "Data",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": true,
+          "help_text": "Markera om förbindelsen användes för data.",
+          "visibility_mode": "editable"
+        }
+      ]
+    },
+    {
+      "system_name": "Kurir",
+      "system_type": "Kurir",
+      "child_label": "Skydd",
+      "sort_order": 20,
+      "options": [
+        {
+          "option_value": "KLAR",
+          "option_label": "Klar",
+          "child_label": null,
+          "sort_order": 10,
+          "children": []
+        },
+        {
+          "option_value": "TTA",
+          "option_label": "TTA",
+          "child_label": null,
+          "sort_order": 20,
+          "children": []
+        }
+      ],
+      "qualifiers": []
+    }
+  ]
+}
+

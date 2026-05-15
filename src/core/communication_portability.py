@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import json
+from os import PathLike
+from pathlib import Path
 from typing import Protocol, cast
 
 from src.core.communication_config import (
@@ -24,6 +27,8 @@ from src.core.communication_config import (
 
 COMMUNICATION_PORTABILITY_BUNDLE_KIND = "eventlog.communication_config"
 COMMUNICATION_PORTABILITY_BUNDLE_VERSION = 1
+COMMUNICATION_PORTABILITY_TEMPLATE_FILENAME = "communication_config.template.json"
+COMMUNICATION_PORTABILITY_EXPORT_FILENAME = "communication_config.export.json"
 PORTABLE_COMMUNICATION_DOMAINS = (
     "communication_systems",
     "communication_options",
@@ -216,6 +221,200 @@ def export_communication_portability_payload(
     return build_communication_portability_bundle(config).to_payload()
 
 
+def build_communication_portability_template_bundle() -> CommunicationPortabilityBundle:
+    """Return the canonical seeded standard Communication baseline as editable JSON."""
+
+    def leaf_option(
+        option_value: str,
+        option_label: str,
+        sort_order: int,
+    ) -> PortableCommunicationOption:
+        return PortableCommunicationOption(
+            option_value=option_value,
+            option_label=option_label,
+            child_label=None,
+            sort_order=sort_order,
+        )
+
+    def boolean_qualifier(
+        qualifier_key: str,
+        label: str,
+        default_value: bool,
+        help_text: str,
+        visibility_mode: str,
+    ) -> PortableCommunicationQualifier:
+        return PortableCommunicationQualifier(
+            qualifier_key=qualifier_key,
+            label=label,
+            field_type="boolean",
+            valid_values=None,
+            default_value=default_value,
+            help_text=help_text,
+            visibility_mode=visibility_mode,
+        )
+
+    return CommunicationPortabilityBundle(
+        communication_systems=(
+            PortableCommunicationSystem(
+                system_name="RA180",
+                system_type="Radio System",
+                child_label="Kanal",
+                sort_order=10,
+                options=tuple(
+                    leaf_option(str(channel), f"Kanal {channel}", channel * 10)
+                    for channel in range(1, 9)
+                ),
+                qualifiers=(
+                    boolean_qualifier(
+                        qualifier_key="encrypted",
+                        label="Krypterad",
+                        default_value=True,
+                        help_text="Markera när RA180-trafiken var krypterad.",
+                        visibility_mode="editable",
+                    ),
+                    boolean_qualifier(
+                        qualifier_key="data",
+                        label="Data",
+                        default_value=True,
+                        help_text="Markera när RA180 användes med datautrustning.",
+                        visibility_mode="editable",
+                    ),
+                ),
+            ),
+            PortableCommunicationSystem(
+                system_name="Motorola",
+                system_type="Radio System",
+                child_label="Kanal",
+                sort_order=20,
+                options=tuple(
+                    leaf_option(str(channel), f"Kanal {channel}", channel * 10)
+                    for channel in range(1, 9)
+                ),
+                qualifiers=(
+                    boolean_qualifier(
+                        qualifier_key="encrypted",
+                        label="Krypterad",
+                        default_value=False,
+                        help_text="Motorola behandlas som klartext i standardinställningen.",
+                        visibility_mode="forced",
+                    ),
+                ),
+            ),
+            PortableCommunicationSystem(
+                system_name="Rakel",
+                system_type="Radio System",
+                child_label="Talgrupp",
+                sort_order=30,
+                options=(
+                    leaf_option("BATALJON", "Bataljon", 10),
+                    leaf_option("KOMPANI", "Kompani", 20),
+                    leaf_option("ANDRA", "Andra", 30),
+                ),
+                qualifiers=(
+                    boolean_qualifier(
+                        qualifier_key="encrypted",
+                        label="Krypterad",
+                        default_value=True,
+                        help_text="Rakel behandlas som krypterad i standardinställningen.",
+                        visibility_mode="forced",
+                    ),
+                ),
+            ),
+            PortableCommunicationSystem(
+                system_name="Kurir",
+                system_type="Kurir",
+                child_label="Skydd",
+                sort_order=40,
+                options=(
+                    leaf_option("KLAR", "Klar", 10),
+                    leaf_option("TTA", "TTA", 20),
+                ),
+            ),
+            PortableCommunicationSystem(
+                system_name="Telefon",
+                system_type="Telefon",
+                child_label=None,
+                sort_order=50,
+                options=(),
+                qualifiers=(
+                    boolean_qualifier(
+                        qualifier_key="encrypted",
+                        label="Krypterad",
+                        default_value=False,
+                        help_text="Markera när telefontrafiken var skyddad eller krypterad.",
+                        visibility_mode="editable",
+                    ),
+                    boolean_qualifier(
+                        qualifier_key="data",
+                        label="Data",
+                        default_value=False,
+                        help_text="Markera när telefonförbindelsen användes för data.",
+                        visibility_mode="editable",
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def render_communication_portability_payload(payload: Mapping[str, object]) -> str:
+    """Return canonical JSON text for one approved communication portability payload."""
+    validate_communication_portability_payload(payload)
+    return json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n"
+
+
+def render_communication_portability_export(config: SystemConfig) -> str:
+    """Return canonical JSON text for the current runtime communication config."""
+    return render_communication_portability_payload(
+        export_communication_portability_payload(config)
+    )
+
+
+def render_communication_portability_template() -> str:
+    """Return canonical starter JSON text for editable Communication config files."""
+    return render_communication_portability_payload(
+        build_communication_portability_template_bundle().to_payload()
+    )
+
+
+def write_communication_portability_export(
+    export_path: str | PathLike[str],
+    config: SystemConfig,
+) -> Path:
+    """Write the current runtime communication config as canonical JSON and return the path."""
+    normalized_path = Path(export_path).expanduser()
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_path.write_text(
+        render_communication_portability_export(config),
+        encoding="utf-8",
+    )
+    return normalized_path
+
+
+def write_communication_portability_template(
+    template_path: str | PathLike[str],
+) -> Path:
+    """Write the canonical starter Communication config JSON template and return the path."""
+    normalized_path = Path(template_path).expanduser()
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_path.write_text(
+        render_communication_portability_template(),
+        encoding="utf-8",
+    )
+    return normalized_path
+
+
+def load_communication_portability_payload(
+    payload_path: str | PathLike[str],
+) -> dict[str, object]:
+    """Load one Communication portability payload from JSON and validate the contract."""
+    normalized_path = Path(payload_path).expanduser()
+    loaded_payload = json.loads(normalized_path.read_text(encoding="utf-8"))
+    payload = _require_mapping(loaded_payload, field_name="bundle")
+    validate_communication_portability_payload(payload)
+    return dict(payload)
+
+
 def parse_communication_portability_payload(
     payload: Mapping[str, object],
 ) -> CommunicationPortabilityBundle:
@@ -251,6 +450,20 @@ def import_communication_portability_payload(
     return CommunicationPortabilityImportResult(
         bundle=bundle,
         config=config_loader.reload_config(),
+    )
+
+
+def import_communication_portability_file(
+    payload_path: str | PathLike[str],
+    *,
+    import_target: CommunicationPortabilityImportTarget,
+    config_loader: CommunicationConfigLoader,
+) -> CommunicationPortabilityImportResult:
+    """Load, validate, apply, and reload one portability payload from a JSON file."""
+    return import_communication_portability_payload(
+        load_communication_portability_payload(payload_path),
+        import_target=import_target,
+        config_loader=config_loader,
     )
 
 
@@ -579,9 +792,12 @@ def _require_nullable_int(value: object, field_name: str) -> None:
 
 
 __all__ = [
+    "build_communication_portability_template_bundle",
     "build_communication_portability_bundle",
+    "COMMUNICATION_PORTABILITY_EXPORT_FILENAME",
     "COMMUNICATION_PORTABILITY_BUNDLE_KIND",
     "COMMUNICATION_PORTABILITY_BUNDLE_VERSION",
+    "COMMUNICATION_PORTABILITY_TEMPLATE_FILENAME",
     "PORTABLE_COMMUNICATION_DOMAINS",
     "EXCLUDED_COMMUNICATION_PORTABILITY_DOMAINS",
     "CommunicationPortabilityBundle",
@@ -589,12 +805,19 @@ __all__ = [
     "CommunicationPortabilityImportResult",
     "CommunicationPortabilityImportTarget",
     "export_communication_portability_payload",
+    "import_communication_portability_file",
     "import_communication_portability_payload",
+    "load_communication_portability_payload",
     "parse_communication_portability_payload",
     "PortableCommunicationOption",
     "PortableCommunicationQualifier",
     "PortableCommunicationSystem",
+    "render_communication_portability_export",
+    "render_communication_portability_payload",
+    "render_communication_portability_template",
     "validate_communication_portability_payload",
+    "write_communication_portability_export",
+    "write_communication_portability_template",
 ]
 
 

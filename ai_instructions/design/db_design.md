@@ -70,7 +70,7 @@ Application uses ConfigParser with `config.ini` for global settings.
 
 ## Database: SQLite3
 
-File-based: `eventlog.db` in application directory (or user-configured path)
+File-based: managed `data/eventlog.db` under the app-local runtime data folder (anchored by the live `data/config.ini` location)
 In-memory for tests: `:memory:`
 
 This document records the current SQLite dialect design. The adapter/repository architecture is defined in `ai_instructions/architecture/db_architecture.md`; exact storage formats and schema details are defined here.
@@ -104,7 +104,7 @@ Stores radio messages, phone calls, written orders, and other communications.
   - **Implementation**: Repository layer reads the setting in seconds and checks the time delta before setting the flag
 
 **Communication Selection Snapshot Fields**:
-- `communication_system` TEXT NULL - Selected top-level communication way/system snapshot (e.g., "RA180", "Motorola", "Courier")
+- `communication_system` TEXT NULL - Selected top-level communication way/system snapshot (e.g., "RA180", "Motorola", "Kurir")
 - `communication_path` TEXT NULL - JSON array describing the selected recursive option path beneath the top-level system
   - Example: `[ {"value": "3", "label": "Channel 3"} ]`
   - Deeper future example: `[ {"value": "3", "label": "Platoon Net"}, {"value": "DATA", "label": "Data Route"} ]`
@@ -239,8 +239,8 @@ Stores configured communication ways/systems and their top-level shared behavior
 
 **Fields**:
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT - Unique identifier
-- `system_name` TEXT NOT NULL UNIQUE - System/way name (e.g., "RA180", "Motorola", "Rakel", "Courier")
-- `system_type` TEXT NOT NULL - Category/type of system (e.g., "Radio System", "Courier", "In Person")
+- `system_name` TEXT NOT NULL UNIQUE - System/way name (e.g., "RA180", "Motorola", "Rakel", "Kurir")
+- `system_type` TEXT NOT NULL - Category/type of system (e.g., "Radio System", "Kurir", "In Person")
 - `child_label` TEXT NULL - Label for the next visible selection level beneath this system (e.g., "Channel")
 - `sort_order` INTEGER - Display order in UI
 - `is_active` INTEGER NOT NULL DEFAULT 1 - Soft delete flag (0=inactive, 1=active)
@@ -250,7 +250,7 @@ Stores configured communication ways/systems and their top-level shared behavior
 system_name="RA180", system_type="Radio System", child_label="Channel"
 system_name="Motorola", system_type="Radio System", child_label="Channel"
 system_name="Rakel", system_type="Radio System", child_label="Channel"
-system_name="Courier", system_type="Courier", child_label=NULL
+system_name="Kurir", system_type="Kurir", child_label=NULL
 ```
 
 **Indexes**:
@@ -277,7 +277,7 @@ This is the actual data behind the current tiered UI. The first option level und
 - **RA180 root children**: channels `1`-`8`, seeded initially as `Channel 1` ... `Channel 8` while still allowing practical free-text labels/designations later
 - **Motorola root children**: channels `1`-`8`, seeded initially as `Channel 1` ... `Channel 8`; custom names are less common but still allowed by the model
 - **Rakel root children**: selected operational channel set for the simplified first-pass radio use
-- **Courier**: no child option rows by default in Phase 1
+- **Kurir**: no child option rows by default in Phase 1
 - Deeper child rows may remain empty in Phase 1 for many systems even though the recursive storage supports them
 
 **Indexes**:

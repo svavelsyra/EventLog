@@ -751,6 +751,7 @@ def test_load_bootstrap_ui_config_returns_code_defaults_for_missing_file(tmp_pat
         ),
         language="sv",
         last_operator="",
+        status_bar_log_level="WARNING",
     )
 
 
@@ -765,6 +766,9 @@ window_height = 768
 window_x = 15
 window_y = 25
 language = EN
+
+[Logging]
+status_bar_log_level = error
 
 [User]
 last_operator = Sgt Example
@@ -782,6 +786,7 @@ last_operator = Sgt Example
         ),
         language="en",
         last_operator="Sgt Example",
+        status_bar_log_level="ERROR",
     )
 
 
@@ -800,6 +805,9 @@ def test_parse_bootstrap_ui_config_logs_malformed_values_and_uses_defaults(
     parser["User"] = {
         "last_operator": "  Sgt Example  ",
     }
+    parser["Logging"] = {
+        "status_bar_log_level": "LOUD",
+    }
 
     with caplog.at_level("WARNING"):
         config = parse_bootstrap_ui_config(parser)
@@ -814,11 +822,13 @@ def test_parse_bootstrap_ui_config_logs_malformed_values_and_uses_defaults(
         ),
         language="sv",
         last_operator="Sgt Example",
+        status_bar_log_level="WARNING",
     )
     assert "Application.window_state" in caplog.text
     assert "Application.window_width" in caplog.text
     assert "Application.window_height" in caplog.text
     assert "Application.window_x" in caplog.text
+    assert "Logging.status_bar_log_level" in caplog.text
 
 
 

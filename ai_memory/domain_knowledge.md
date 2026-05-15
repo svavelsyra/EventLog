@@ -69,7 +69,7 @@
   - **Motorola** - clear text close range group-platoon communication.
   - **RAKEL** - much more complex capability set and communication structure than simple radio modeling suggests.
   - **Telephone** - can be plain telephone, crypto telephone, or used for data transfer with separate crypto apparatus/app support.
-  - **Courier** - an important non-radio communication way/example that should help keep the model from silently assuming every configured communication system is radio-based.
+  - **Kurir** - an important non-radio communication way/example that should help keep the model from silently assuming every configured communication system is radio-based.
   - **Spoken word / in-person meeting** - direct human communication with no electronic system.
 - **Crypto apparatus/app capability is cross-cutting**: some added technology such as a `krypapp` may ride on top of another communication way rather than being the base system itself. Example: the same base RA180 audio path might exist both with and without added crypto apparatus.
 - **Modeling goal**: preserve important operational nuance without making day-to-day logging so complex that users will avoid or misuse it.
@@ -85,7 +85,7 @@
   - **RA180** - use channels; keep the selectable communication distinction to **Speech/Data** plus **encrypted/clear**.
   - **Motorola** - clear only; channels matter.
   - **Rakel** - treat as encrypted-only for the initial model; channels matter.
-- **Courier side note**: courier is still a valuable non-radio example even though it may in some cases carry encrypted material on paper; the main modeling lesson is that the system can force or hide top-level qualifiers when operator choice is not the important part.
+- **Kurir side note**: kurir is still a valuable non-radio example even though it may in some cases carry encrypted material on paper; the main modeling lesson is that the system can force or hide top-level qualifiers when operator choice is not the important part.
 - **Operational implication**: encrypted/clear is not only display detail; it may affect how communications are reviewed and filtered later.
 - **RA180 practical use clarification**:
   - In normal use, the operator typically sets an RA180 **mode** to either `clear` or `encrypted`.
@@ -96,10 +96,36 @@
   - The most common practical setup is one selected channel, mode set to `encrypted`, DART connected, and the radio used for both voice and data.
   - Channel-specific data/voice restrictions can exist operationally (for example data only on one channel, data+voice on another, voice only on a third), but the app does **not** need to enforce those restrictions in Phase 1; they are important as domain context, not as a required hard validation rule.
   - When crypto data is attached to RA180, operators may still switch between `clear` and `encrypted` for speech use, while data use is effectively encrypted-only in practice.
-  - For Phase 1 UX, a simple boolean-like `Data` flag may be acceptable if unchecked means ordinary speech/voice, but this remains a design choice rather than a finalized rule.
+  - **Confirmed Phase 1 baseline**: use one visible `Kanal` selection with options `1`-`8`, plus top-level boolean qualifiers `Krypterad` and `Data`.
+  - **Confirmed defaults**: for the standard seeded/template baseline, both `Krypterad` and `Data` default to `true` on `RA180`.
+  - Do **not** use a nested default `VOICE`/`DATA` route tree for the standard baseline; keep the speech/data distinction as the top-level `Data` qualifier unless a later custom setup explicitly chooses a deeper path model.
  - **Motorola practical channel note**:
    - Motorola should also be modeled with a practical base channel set of **1-8**.
    - Free-text naming/designation is less common than on RA180, but the model should still allow a channel to have a human-readable label when that is useful.
+
+  - **Rakel Phase 1 baseline**:
+    - Use one visible `Talgrupp` selection.
+    - Standard seeded/template options are `Bataljon`, `Kompani`, and `Andra`.
+    - `Krypterad` stays a top-level qualifier with default `true` and forced/non-editable behavior.
+    - Do not add extra baseline qualifiers such as `Data` or `Prioritet` for the standard Rakel setup.
+
+  - **Motorola Phase 1 baseline**:
+    - Use one visible `Kanal` selection with the practical base channel set **1-8**.
+    - `Krypterad` stays a top-level qualifier with default `false` and forced/non-editable behavior.
+    - The standard baseline treats Motorola as clear-only and does not add extra baseline qualifiers.
+
+    - **Kurir Phase 1 baseline**:
+      - `Kurir` means either that a courier physically delivered the message or that someone told us something by a non-radio/non-telephone route.
+      - Use one visible child selection named `Skydd`.
+      - Standard seeded/template options are `Klar` and `TTA` (`Täcktabell Armén`).
+      - Do not add extra top-level baseline qualifiers such as `Krypterad`; the meaningful default distinction is carried by the `Skydd` choice itself.
+
+        - **Telefon Phase 1 baseline**:
+          - `Telefon` is part of the standard baseline because ordinary mobile phones are a common way to receive information.
+          - Keep the standard baseline flat with no child path/options.
+          - Use top-level editable qualifiers `Krypterad` and `Data`.
+          - Standard seeded/template defaults are `Krypterad=false` and `Data=false`.
+          - A richer future protection model may later replace the boolean `Krypterad` with a more specific protection selector, but Phase 1 should stay with checkboxes.
 
 **Historical accuracy requirement**: Logs must preserve channel designations as they were at time of logging, because designations can change during operations.
 

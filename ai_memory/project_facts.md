@@ -132,6 +132,8 @@ SQLite Dialect Implementation
 - Don't pretend plaintext files are secure
 - Accept what you cannot protect (config.ini, Python source are readable)
 - Remove fake security (code-based limits can be bypassed)
+- Prefer operator freedom over paternalistic restrictions, but allow tighter constraints when they are required to keep one coherent security model instead of contradictory half-restrictions.
+- Current clarified startup direction: if EventLog remains single-database-only for the local SQLite model, it is acceptable to restrict creation/open flows to one app-owned database location instead of offering arbitrary target selection in the startup UI.
 
 ### Focus on Real Security
 - Encryption: AES-256
@@ -222,6 +224,7 @@ SQLite Dialect Implementation
 - **Purpose is most important** - The WHY enables alternatives
 - Versioning: MAJOR.MINOR.MICRO (e.g., 001.001.001.md)
 - Supports splitting when scope grows
+- Story-state handling: the AI may mark acceptance criteria/status as done inside the story file when the work is verified, but must **not** move stories between `ToDo/` and `Done/`; that move is the user's prerogative
 
 ### Session Logs
 - One per AI session

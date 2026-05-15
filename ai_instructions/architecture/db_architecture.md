@@ -380,7 +380,7 @@ repository = EventLogRepository(adapter)
 - `structured_reports` - 7S, 9-liner, etc. (foreign key to `event_entries`)
 
 ### Configuration Tables
-- `communication_systems` - Top-level communication ways/systems such as RA180, Motorola, Rakel, Courier
+- `communication_systems` - Top-level communication ways/systems such as RA180, Motorola, Rakel, Kurir
 - `communication_options` - Recursive configured child options beneath each top-level system
 - `communication_qualifiers_config` - Top-level qualifier definitions/behavior per system
 - `report_templates` - 7S template, 9-liner template, etc.

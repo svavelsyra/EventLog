@@ -25,9 +25,11 @@ Saved in config file (e.g., `config.ini` or similar) - loaded before database co
 1. **Window Position** - Last X, Y coordinates
 2. **Window Size** - Last width, height
 3. **Window State** - Windowed, Maximized, or Fullscreen
-4. **Database Path** - Location of the SQLite database file
+4. **Startup Bootstrap Hints** - Non-authoritative remembered startup values such as selected technology and credential-mode hints where applicable
 
 **Reasoning**: These settings must be available immediately at application startup, before database connection is established.
+
+**Current local SQLite note**: The active SQLite database location is one fixed app-owned managed path, so the database path is not an ordinary operator preference stored for startup choice.
 
 ### Database Storage (User Preferences)
 Saved in database `user_preferences` table - loaded after database connection established:
@@ -50,7 +52,7 @@ Saved in database `user_preferences` table - loaded after database connection es
 
 ### Design Goal
 
-The startup dialog must support remembered-value prefill, manual override, backend-driven field visibility, and repeated presenter recomputation without turning the GUI seam into one getter/setter per field.
+The startup dialog must support backend-driven field visibility and repeated presenter recomputation without turning the GUI seam into one getter/setter per field. For the current local SQLite model, startup should revolve around one fixed app-owned database location rather than ordinary operator-driven target selection.
 
 ### Primary Contract
 
@@ -65,8 +67,7 @@ The dialog must be safe to re-render multiple times during one startup attempt.
 
 Re-renders happen when the operator:
 - changes database technology,
-- switches between remembered target and manual target,
-- edits the selected database path,
+- changes some other startup input that affects the selected backend state,
 - retries after validation/authentication errors,
 - or returns to the dialog from a browse/reset-related flow.
 
@@ -76,6 +77,7 @@ Re-renders happen when the operator:
 - Operator edits remain in the widget variables until the next presenter-owned state says otherwise.
 - The presenter is the authority for which startup fields are visible, required, editable, and grouped.
 - The view may derive Swedish labels and browse-button visibility from stable field identities, but it should not invent new startup-policy facts.
+- For the current local SQLite mode, the presenter should treat the active database as one fixed app-owned managed location and should not rely on an ordinary remembered/manual target toggle in the startup UI.
 
 ### Structured Readback Rule
 
@@ -85,8 +87,9 @@ That submission should carry:
 - selected startup mode when relevant,
 - selected dialect,
 - operator name,
-- remembered/manual target choice,
 - and field values keyed by stable startup field names.
+
+For the current local SQLite path, the submission does not need to carry arbitrary target-choice state for ordinary startup, because the active database location is app-owned and fixed.
 
 Avoid adding dedicated read methods for individual startup fields unless the read has distinct UI meaning beyond ordinary form submission.
 
@@ -326,13 +329,13 @@ This is the complex part - communication selection is driven by a recursive conf
 ### Communication System + Recursive Path Selection
 
 **Design Philosophy - Recursive Underlying Model, Bounded Visible UI**:
-- **Primary selection**: choose the top-level communication system/way (`RA180`, `Motorola`, `Rakel`, `Courier`, etc.)
+- **Primary selection**: choose the top-level communication system/way (`RA180`, `Motorola`, `Rakel`, `Kurir`, etc.)
 - **Child selections**: choose the configured path beneath that system
 - **Top-level qualifiers**: choose or accept qualifiers such as `encrypted` and possibly `data`
 - The current GUI may still render only the first **three visible levels** for practical use, but the underlying structure is recursive and should not require redesign if a fourth visible level is ever needed later.
 
 **Configuration Requirements**:
-1. **Communication Systems/Ways**: configurable top-level list (`RA180`, `Motorola`, `Rakel`, `Courier`, etc.)
+1. **Communication Systems/Ways**: configurable top-level list (`RA180`, `Motorola`, `Rakel`, `Kurir`, etc.)
 2. **Recursive Child Options**: each system can have zero or more child options; each option can in turn have zero or more child options
 3. **Child Labels**: each system/option can define what the next visible selection level should be called
 4. **Top-Level Qualifiers**: systems define whether qualifiers like `encrypted` or `data` are editable, forced, or hidden
@@ -363,7 +366,7 @@ This is the complex part - communication selection is driven by a recursive conf
 
 **UI Flow** (recursive underneath, bounded in presentation):
 1. User selects **Communication System** from dropdown
-   - Options: `RA180`, `Motorola`, `Rakel`, `Courier`, etc.
+   - Options: `RA180`, `Motorola`, `Rakel`, `Kurir`, etc.
    - Special entry: `+ Lägg till ...` remains a future focused flow, not a full admin UI
 2. GUI checks whether the selected system has active root child options
 3. If yes, show the next configured dropdown using the system's `child_label`
@@ -381,7 +384,7 @@ This is the complex part - communication selection is driven by a recursive conf
 - **RA180** → likely one visible child dropdown for channel selection + top-level `encrypted` and likely `data`
 - **Motorola** → one visible child dropdown for channel selection + forced clear/no-encryption behavior
 - **Rakel** → one visible child dropdown for channel selection + forced encrypted behavior
-- **Courier** → no child dropdowns in Phase 1
+- **Kurir** → no child dropdowns in Phase 1
 
 **Quick Add Flow**:
 - A focused quick-add dialog may later add a new child option at the currently relevant level in the tree

@@ -59,10 +59,9 @@ Thumbs.db
 
 # Logs
 *.log
-logs/
 
 # Local project state
 session_logs/
-config.ini
+data/
 project_structure.txt
 

@@ -124,6 +124,14 @@ class SQLiteAdapter(DatabaseAdapter):
         """Establish the SQLite connection and row-oriented cursor state."""
         dbapi_module = self._resolve_dbapi_module()
 
+        if self.database_path != ":memory:":
+            try:
+                Path(self.database_path).parent.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                raise DatabaseAdapterError(
+                    f"Could not prepare SQLite database directory for {self.database_path!r}"
+                ) from exc
+
         try:
             self.connection = dbapi_module.connect(self.database_path)
         except Exception as exc:
@@ -163,25 +171,10 @@ class SQLiteAdapter(DatabaseAdapter):
                 f"this app supports up to {SQLITE_USER_VERSION!r}."
             )
 
-        current_user_version = starting_user_version
-        while current_user_version < SQLITE_USER_VERSION:
-            migration_step = self._resolve_supported_migration(current_user_version)
-            if migration_step is None:
-                raise MigrationNeeded(
-                    f"{self._profile_label()} {self.database_path!r} requires migration from user_version "
-                    f"{current_user_version!r} to {SQLITE_USER_VERSION!r}, but no supported migration path exists."
-                )
-
-            migration_step()
-            migrated_user_version = self._read_pragma_int("user_version")
-            if migrated_user_version <= current_user_version:
-                raise DatabaseAdapterError(
-                    f"SQLite migration for {self.database_path!r} did not advance user_version beyond "
-                    f"{current_user_version!r}."
-                )
-            current_user_version = migrated_user_version
-
-        return True
+        raise MigrationNeeded(
+            f"{self._profile_label()} {self.database_path!r} requires migration from user_version "
+            f"{starting_user_version!r} to {SQLITE_USER_VERSION!r}, but no supported migration path exists."
+        )
 
     def execute(
         self,

@@ -1,0 +1,221 @@
+{
+  "bundle_kind": "eventlog.communication_config",
+  "bundle_version": 1,
+  "portable_domains": [
+    "communication_systems",
+    "communication_options",
+    "communication_qualifiers"
+  ],
+  "communication_systems": [
+    {
+      "system_name": "RA180",
+      "system_type": "Radio System",
+      "child_label": "Channel",
+      "sort_order": 10,
+      "options": [
+        {
+          "option_value": "1",
+          "option_label": "Channel 1",
+          "child_label": null,
+          "sort_order": 10,
+          "children": []
+        },
+        {
+          "option_value": "2",
+          "option_label": "Channel 2",
+          "child_label": null,
+          "sort_order": 20,
+          "children": []
+        },
+        {
+          "option_value": "3",
+          "option_label": "Channel 3",
+          "child_label": null,
+          "sort_order": 30,
+          "children": []
+        },
+        {
+          "option_value": "4",
+          "option_label": "Channel 4",
+          "child_label": null,
+          "sort_order": 40,
+          "children": []
+        },
+        {
+          "option_value": "5",
+          "option_label": "Channel 5",
+          "child_label": null,
+          "sort_order": 50,
+          "children": []
+        },
+        {
+          "option_value": "6",
+          "option_label": "Channel 6",
+          "child_label": null,
+          "sort_order": 60,
+          "children": []
+        },
+        {
+          "option_value": "7",
+          "option_label": "Channel 7",
+          "child_label": null,
+          "sort_order": 70,
+          "children": []
+        },
+        {
+          "option_value": "8",
+          "option_label": "Channel 8",
+          "child_label": null,
+          "sort_order": 80,
+          "children": []
+        }
+      ],
+      "qualifiers": [
+        {
+          "qualifier_key": "data",
+          "label": "Data",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": false,
+          "help_text": "Mark when the RA180 path was used with attached data equipment.",
+          "visibility_mode": "editable"
+        },
+        {
+          "qualifier_key": "encrypted",
+          "label": "Krypterad",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": false,
+          "help_text": "RA180 can be logged as clear or encrypted traffic.",
+          "visibility_mode": "editable"
+        }
+      ]
+    },
+    {
+      "system_name": "Motorola",
+      "system_type": "Radio System",
+      "child_label": "Channel",
+      "sort_order": 20,
+      "options": [
+        {
+          "option_value": "1",
+          "option_label": "Channel 1",
+          "child_label": null,
+          "sort_order": 10,
+          "children": []
+        },
+        {
+          "option_value": "2",
+          "option_label": "Channel 2",
+          "child_label": null,
+          "sort_order": 20,
+          "children": []
+        },
+        {
+          "option_value": "3",
+          "option_label": "Channel 3",
+          "child_label": null,
+          "sort_order": 30,
+          "children": []
+        },
+        {
+          "option_value": "4",
+          "option_label": "Channel 4",
+          "child_label": null,
+          "sort_order": 40,
+          "children": []
+        },
+        {
+          "option_value": "5",
+          "option_label": "Channel 5",
+          "child_label": null,
+          "sort_order": 50,
+          "children": []
+        },
+        {
+          "option_value": "6",
+          "option_label": "Channel 6",
+          "child_label": null,
+          "sort_order": 60,
+          "children": []
+        },
+        {
+          "option_value": "7",
+          "option_label": "Channel 7",
+          "child_label": null,
+          "sort_order": 70,
+          "children": []
+        },
+        {
+          "option_value": "8",
+          "option_label": "Channel 8",
+          "child_label": null,
+          "sort_order": 80,
+          "children": []
+        }
+      ],
+      "qualifiers": [
+        {
+          "qualifier_key": "encrypted",
+          "label": "Krypterad",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": false,
+          "help_text": "Motorola is treated as clear-only in the Phase 1 defaults.",
+          "visibility_mode": "forced"
+        }
+      ]
+    },
+    {
+      "system_name": "Rakel",
+      "system_type": "Radio System",
+      "child_label": "Channel",
+      "sort_order": 30,
+      "options": [
+        {
+          "option_value": "X",
+          "option_label": "Talkgroup X",
+          "child_label": null,
+          "sort_order": 10,
+          "children": []
+        },
+        {
+          "option_value": "Y",
+          "option_label": "Talkgroup Y",
+          "child_label": null,
+          "sort_order": 20,
+          "children": []
+        }
+      ],
+      "qualifiers": [
+        {
+          "qualifier_key": "encrypted",
+          "label": "Krypterad",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": true,
+          "help_text": "Rakel is treated as encrypted-only in the Phase 1 defaults.",
+          "visibility_mode": "forced"
+        }
+      ]
+    },
+    {
+      "system_name": "Courier",
+      "system_type": "Courier",
+      "child_label": null,
+      "sort_order": 40,
+      "options": [],
+      "qualifiers": [
+        {
+          "qualifier_key": "encrypted",
+          "label": "Krypterad",
+          "field_type": "boolean",
+          "valid_values": null,
+          "default_value": false,
+          "help_text": "Courier keeps the shared qualifier model without exposing radio-only choices.",
+          "visibility_mode": "hidden"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "bundle_kind": "eventlog.communication_config",
+  "bundle_version": 1,
+  "portable_domains": [
+    "communication_systems",
+    "communication_options",
+    "communication_qualifiers"
+  ],
+  "communication_systems": []
+}

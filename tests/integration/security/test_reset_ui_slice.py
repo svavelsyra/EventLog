@@ -213,11 +213,15 @@ def _scenario_startup_emergency_reset(
 
 class _ShellSpy:
     def __init__(self, *, snapshot_config: MainWindowConfig | None = None) -> None:
-        self.close_called = False
+        self.restart_requested = False
+        self.exit_requested = False
         self.snapshot_config = snapshot_config
 
-    def close(self) -> None:
-        self.close_called = True
+    def request_restart_to_startup(self) -> None:
+        self.restart_requested = True
+
+    def request_exit_application(self) -> None:
+        self.exit_requested = True
 
     def snapshot_main_window_config(self) -> MainWindowConfig | None:
         return self.snapshot_config
@@ -294,6 +298,8 @@ def _scenario_main_window_reset(
     view = MainWindowShellView(
         root,
         app_runtime_state=AppRuntimeState(),
+        window_config=MainWindowConfig(),
+        status_bar_log_level="WARNING",
         reset_callback=callback,
     )
     database_exists_before_reset = Path(database_config.database_path).exists()
@@ -305,7 +311,7 @@ def _scenario_main_window_reset(
         app_module.Path.unlink = original_unlink
 
     return {
-        "close_called": shell.close_called,
+        "restart_requested": shell.restart_requested,
         "status_text": view.status_label.cget("text"),
         "database_exists_before_reset": database_exists_before_reset,
     }
@@ -369,6 +375,8 @@ def _scenario_main_window_close(
     view = MainWindowShellView(
         root,
         app_runtime_state=app_runtime_state,
+        window_config=bootstrap_ui_config.main_window,
+        status_bar_log_level="WARNING",
         close_callback=callback,
     )
     database_exists_before_close = Path(database_config.database_path).exists()
@@ -381,7 +389,7 @@ def _scenario_main_window_close(
         repository_access_denied = "closed" in str(exc).lower()
 
     return {
-        "close_called": shell.close_called,
+        "exit_requested": shell.exit_requested,
         "status_text": view.status_label.cget("text"),
         "database_exists_before_close": database_exists_before_close,
         "repository_access_denied": repository_access_denied,
@@ -484,7 +492,7 @@ def test_startup_dialog_emergency_reset_button_keeps_dialog_open_and_lists_combi
     assert parser.get("sqlite", "database_path") == Path(database_config.database_path).name
 
 
-def test_main_window_reset_button_runs_active_context_reset_and_closes_shell_on_success(
+def test_main_window_reset_button_runs_active_context_reset_and_requests_startup_restart_on_success(
     tmp_path: Path,
 ) -> None:
     database_config, config_path, log_path = _prepare_main_window_reset_artifacts(tmp_path)
@@ -503,7 +511,7 @@ def test_main_window_reset_button_runs_active_context_reset_and_closes_shell_on_
     parser = load_app_config(config_path)
 
     assert result == {
-        "close_called": True,
+        "restart_requested": True,
         "status_text": "Statusyta - loggning och operatörsstatus kommer senare.",
         "database_exists_before_reset": True,
     }
@@ -532,7 +540,7 @@ def test_main_window_reset_button_keeps_shell_open_and_shows_failure_message_whe
     parser = load_app_config(config_path)
 
     assert result == {
-        "close_called": False,
+        "restart_requested": False,
         "status_text": (
             "MISSLYCKADES\n"
             "Följ upp manuellt.\n"
@@ -565,7 +573,7 @@ def test_main_window_reset_button_keeps_shell_open_when_log_cleanup_fails_after_
     parser = load_app_config(config_path)
 
     assert result == {
-        "close_called": False,
+        "restart_requested": False,
         "status_text": (
             "MISSLYCKADES\n"
             "Följ upp manuellt.\n"
@@ -598,7 +606,7 @@ def test_main_window_reset_button_blocks_close_and_keeps_artifacts_when_backend_
     parser = load_app_config(config_path)
 
     assert result == {
-        "close_called": False,
+        "restart_requested": False,
         "status_text": (
             "MISSLYCKADES\n"
             "Följ upp manuellt.\n"
@@ -631,7 +639,7 @@ def test_main_window_reset_button_surfaces_access_denial_failure_when_active_con
     parser = load_app_config(config_path)
 
     assert result == {
-        "close_called": False,
+        "restart_requested": False,
         "status_text": (
             "MISSLYCKADES\n"
             "Eventuella nyckelfiler behöver tas bort manuellt."
@@ -662,7 +670,7 @@ def test_main_window_close_request_releases_active_context_and_closes_shell_with
     bootstrap_ui = load_bootstrap_ui_config(config_path)
 
     assert result == {
-        "close_called": True,
+        "exit_requested": True,
         "status_text": "Statusyta - loggning och operatörsstatus kommer senare.",
         "database_exists_before_close": True,
         "repository_access_denied": True,
@@ -701,7 +709,7 @@ def test_main_window_close_request_keeps_shell_open_and_preserves_access_when_ac
     parser = load_app_config(config_path)
 
     assert result == {
-        "close_called": False,
+        "exit_requested": False,
         "status_text": "MISSLYCKADES",
         "database_exists_before_close": True,
         "repository_access_denied": False,

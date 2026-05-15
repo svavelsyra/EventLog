@@ -12,25 +12,36 @@ from dataclasses import dataclass
 import logging
 from os import PathLike
 from pathlib import Path
+from typing import cast
 
 from src.config import (
     BootstrapUiConfig,
-    CONFIG_TEMPLATE_FILENAME,
     DatabaseConfig,
     load_bootstrap_ui_config,
     load_database_config,
     save_bootstrap_ui_config,
     write_config_template,
 )
-from src.config.app_config import BootstrapTargetConfig
+from src.config.app_config import (
+    APP_RUNTIME_DATA_DIRECTORY_NAME,
+    BootstrapTargetConfig,
+    DEFAULT_CONFIG_FILENAME,
+)
 from src.core import (
+    CommunicationConfigLoader,
+    CommunicationPortabilityImportTarget,
     ResetAttemptFacts,
     ResetFollowUpFacts,
     ResetFollowUpIssue,
     assemble_reset_report_from_facts,
+    import_communication_portability_file,
+    write_communication_portability_export,
+    write_communication_portability_template,
 )
 from src.core.app_runtime_state import AppRuntimeState
+from src.core.communication_config import CommunicationConfigSource
 from src.db.repositories.bootstrap_backend_policy import (
+    SQLITE_DIALECT,
     resolve_runtime_database_config,
     save_bootstrap_target_config,
     supports_external_key_file_advisory,
@@ -41,7 +52,7 @@ from src.db.repositories.startup_bootstrap import (
     BackendCleanupOutcome,
     cleanup_remembered_bootstrap_target,
 )
-from src.gui.app_shell import AppShell
+from src.gui.app_shell import AppShell, MainWindowLifecycleAction
 from src.gui.startup_dialog_controller import (
     EmergencyResetCallback,
     EmergencyResetResult,
@@ -50,19 +61,34 @@ from src.gui.presenters.startup_dialog_presenter import StartupDialogSuccess
 from src.security import ResetCoordinator, ResetOutcome
 from src.security.reset_flow import delete_log_cleanup_targets
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
+DEFAULT_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent
+    / APP_RUNTIME_DATA_DIRECTORY_NAME
+    / DEFAULT_CONFIG_FILENAME
+)
 ResetCleanup = Callable[[], None]
 
 LOGGER = logging.getLogger(__name__)
 
 ResetFollowUpHint = ResetFollowUpIssue
 MainWindowLifecycleCallback = Callable[[], str | None]
+MainWindowFileActionCallback = Callable[[str | PathLike[str]], str | None]
 
 _MAIN_WINDOW_RESET_FAILURE_MESSAGE = "MISSLYCKADES"
 _MAIN_WINDOW_MANUAL_FOLLOW_UP_MESSAGE = "Följ upp manuellt."
 _MAIN_WINDOW_KEY_FILE_ADVISORY = "Eventuella nyckelfiler behöver tas bort manuellt."
-_MAIN_WINDOW_TEMPLATE_WRITTEN_MESSAGE = f"Skrev {CONFIG_TEMPLATE_FILENAME}."
-_MAIN_WINDOW_TEMPLATE_WRITE_FAILED_MESSAGE = f"Kunde inte skriva {CONFIG_TEMPLATE_FILENAME}."
+_MAIN_WINDOW_APP_CONFIG_TEMPLATE_WRITE_FAILED_MESSAGE = (
+    "Kunde inte skriva vald app-configmall."
+)
+_MAIN_WINDOW_COMMUNICATION_TEMPLATE_WRITE_FAILED_MESSAGE = (
+    "Kunde inte skriva vald kommunikationsmall."
+)
+_MAIN_WINDOW_COMMUNICATION_EXPORT_WRITE_FAILED_MESSAGE = (
+    "Kunde inte skriva vald kommunikationsexport."
+)
+_MAIN_WINDOW_COMMUNICATION_IMPORT_FAILED_MESSAGE = (
+    "Kunde inte importera vald kommunikationskonfiguration."
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -117,13 +143,12 @@ def resolve_database_config(config_path: str | PathLike[str] | None = None) -> D
     """Return runtime bootstrap configuration from config.ini or defaults."""
     resolved_config_path = _resolve_config_path(config_path)
     loaded_config = load_database_config(resolved_config_path)
-    if loaded_config is not None:
-        return resolve_runtime_database_config(
-            loaded_config,
-            config_path=resolved_config_path,
-        )
+    runtime_config = loaded_config or DatabaseConfig(dialect=SQLITE_DIALECT)
+    return resolve_runtime_database_config(
+        runtime_config,
+        config_path=resolved_config_path,
+    )
 
-    return DatabaseConfig()
 
 
 def resolve_bootstrap_ui_settings(
@@ -292,7 +317,7 @@ def _build_main_window_reset_callback(
     def reset_callback() -> str | None:
         result = run_active_context_reset(startup_result, config_path=config_path)
         if result.success:
-            shell.close()
+            shell.request_restart_to_startup()
             return None
 
         return _build_main_window_reset_failure_message(result)
@@ -324,7 +349,7 @@ def _build_main_window_close_callback(
                 )
             except Exception:
                 LOGGER.warning("Failed to persist bootstrap UI config on close.", exc_info=True)
-            shell.close()
+            shell.request_exit_application()
             return None
 
         return _MAIN_WINDOW_RESET_FAILURE_MESSAGE
@@ -332,23 +357,97 @@ def _build_main_window_close_callback(
     return close_callback
 
 
-def _build_config_template_regeneration_callback(
-    *,
-    config_path: str | PathLike[str],
-) -> MainWindowLifecycleCallback:
-    """Return the visible-shell callback that rewrites the reference config template."""
+def _build_app_config_template_callback(
+    ) -> MainWindowFileActionCallback:
+    """Return the visible-shell callback that writes the app config template."""
 
-    def regenerate_template_callback() -> str | None:
-        template_path = _resolve_config_path(config_path).with_name(CONFIG_TEMPLATE_FILENAME)
+    def write_app_config_template_callback(target_path: str | PathLike[str]) -> str | None:
         try:
-            write_config_template(template_path)
+            written_path = write_config_template(target_path)
         except Exception:
             LOGGER.warning("Failed to regenerate config.ini.template.", exc_info=True)
-            return _MAIN_WINDOW_TEMPLATE_WRITE_FAILED_MESSAGE
+            return _MAIN_WINDOW_APP_CONFIG_TEMPLATE_WRITE_FAILED_MESSAGE
 
-        return _MAIN_WINDOW_TEMPLATE_WRITTEN_MESSAGE
+        return f"Skrev {written_path}."
 
-    return regenerate_template_callback
+    return write_app_config_template_callback
+
+
+def _build_communication_template_callback(
+    ) -> MainWindowFileActionCallback:
+    """Return the visible-shell callback that writes the Communication JSON template."""
+
+    def write_communication_template_callback(target_path: str | PathLike[str]) -> str | None:
+        try:
+            written_path = write_communication_portability_template(target_path)
+        except Exception:
+            LOGGER.warning(
+                "Failed to regenerate the Communication config JSON template.",
+                exc_info=True,
+            )
+            return _MAIN_WINDOW_COMMUNICATION_TEMPLATE_WRITE_FAILED_MESSAGE
+
+        return f"Skrev {written_path}."
+
+    return write_communication_template_callback
+
+
+def _build_communication_export_callback(
+    startup_result: StartupDialogSuccess,
+    ) -> MainWindowFileActionCallback:
+    """Return the visible-shell callback that exports the live Communication config."""
+
+    def write_communication_export_callback(target_path: str | PathLike[str]) -> str | None:
+        try:
+            runtime_config = CommunicationConfigLoader(
+                cast(CommunicationConfigSource, cast(object, startup_result.repository))
+            ).get_config(force_reload=True)
+            written_path = write_communication_portability_export(
+                target_path,
+                runtime_config,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Failed to export the live Communication config JSON file.",
+                exc_info=True,
+            )
+            return _MAIN_WINDOW_COMMUNICATION_EXPORT_WRITE_FAILED_MESSAGE
+
+        return f"Skrev {written_path}."
+
+    return write_communication_export_callback
+
+
+def _build_communication_import_callback(
+    shell: AppShell,
+    startup_result: StartupDialogSuccess,
+    ) -> MainWindowFileActionCallback:
+    """Return the visible-shell callback that imports one Communication JSON file."""
+
+    def import_communication_callback(target_path: str | PathLike[str]) -> str | None:
+        try:
+            loader = CommunicationConfigLoader(
+                cast(CommunicationConfigSource, cast(object, startup_result.repository))
+            )
+            import_communication_portability_file(
+                target_path,
+                import_target=cast(
+                    CommunicationPortabilityImportTarget,
+                    cast(object, startup_result.repository),
+                ),
+                config_loader=loader,
+            )
+            shell.refresh_communication_presenter_runtime_config()
+        except Exception:
+            LOGGER.warning(
+                "Failed to import the selected Communication config JSON file.",
+                exc_info=True,
+            )
+            return _MAIN_WINDOW_COMMUNICATION_IMPORT_FAILED_MESSAGE
+
+        return f"Importerade {Path(target_path)}."
+
+    return import_communication_callback
 
 
 
@@ -422,18 +521,21 @@ def run_active_context_reset(
 def run_app(config_path: str | PathLike[str] | None = None) -> StartupDialogSuccess | None:
     """Run startup, show the minimal main window, and return the startup result."""
     resolved_config_path = _resolve_config_path(config_path)
-    bootstrap_ui_settings = resolve_bootstrap_ui_settings(resolved_config_path)
-    database_config = resolve_database_config(resolved_config_path)
     shell = AppShell()
-    startup_result = shell.run_startup_dialog(
-        database_config,
-        last_operator_prefill=bootstrap_ui_settings.last_operator,
-        emergency_reset_callback=_build_startup_emergency_reset_callback(
+    while True:
+        bootstrap_ui_settings = resolve_bootstrap_ui_settings(resolved_config_path)
+        database_config = resolve_database_config(resolved_config_path)
+        startup_result = shell.run_startup_dialog(
             database_config,
-            config_path=resolved_config_path,
-        ),
-    )
-    if startup_result is not None:
+            last_operator_prefill=bootstrap_ui_settings.last_operator,
+            emergency_reset_callback=_build_startup_emergency_reset_callback(
+                database_config,
+                config_path=resolved_config_path,
+            ),
+        )
+        if startup_result is None:
+            return None
+
         app_runtime_state = AppRuntimeState(active_operator=startup_result.last_operator)
         try:
             save_bootstrap_target_config(resolved_config_path, startup_result.remembered_target)
@@ -441,9 +543,6 @@ def run_app(config_path: str | PathLike[str] | None = None) -> StartupDialogSucc
             shell.close()
             raise
         main_window_callbacks: dict[str, MainWindowLifecycleCallback] = {
-            "template_callback": _build_config_template_regeneration_callback(
-                config_path=resolved_config_path,
-            ),
             "reset_callback": _build_main_window_reset_callback(
                 shell,
                 startup_result,
@@ -457,14 +556,21 @@ def run_app(config_path: str | PathLike[str] | None = None) -> StartupDialogSucc
                 app_runtime_state=app_runtime_state,
             ),
         }
-        shell.show_main_window(
+        lifecycle_action = shell.show_main_window(
             startup_result,
             app_runtime_state=app_runtime_state,
             window_config=bootstrap_ui_settings.main_window,
+            status_bar_log_level=bootstrap_ui_settings.status_bar_log_level,
+            app_config_template_callback=_build_app_config_template_callback(),
+            communication_template_callback=_build_communication_template_callback(),
+            communication_export_callback=_build_communication_export_callback(startup_result),
+            communication_import_callback=_build_communication_import_callback(shell, startup_result),
             **main_window_callbacks,
         )
+        if lifecycle_action is MainWindowLifecycleAction.RESTART_TO_STARTUP:
+            continue
 
-    return startup_result
+        return startup_result
 
 
 

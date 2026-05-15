@@ -22,28 +22,38 @@ def test_loader_builds_runtime_system_config_from_repository_reads(
 
     assert isinstance(config, SystemConfig)
     assert loader.has_cached_config is True
-    assert config.system_names == ("RA180", "Motorola", "Rakel", "Courier")
+    assert config.system_names == ("RA180", "Motorola", "Rakel", "Kurir", "Telefon")
     assert config.is_empty is False
 
     ra180 = config.get_system("RA180")
     assert ra180 is not None
     assert ra180.system_type == "Radio System"
-    assert ra180.child_label == "Channel"
+    assert ra180.child_label == "Kanal"
     assert [option.option_value for option in ra180.options[:3]] == ["1", "2", "3"]
     assert ra180.get_option("2") is not None
-    assert ra180.get_option("2").option_label == "Channel 2"
+    assert ra180.get_option("2").option_label == "Kanal 2"
     assert ra180.get_option("2").children == ()
 
     encrypted = ra180.get_qualifier("encrypted")
     assert encrypted is not None
-    assert encrypted.default_value is False
+    assert encrypted.default_value is True
     assert encrypted.visibility_mode == "editable"
 
-    courier = config.get_system("Courier")
-    assert courier is not None
-    assert courier.options == ()
-    assert courier.get_qualifier("encrypted") is not None
-    assert courier.get_qualifier("encrypted").visibility_mode == "hidden"
+    data = ra180.get_qualifier("data")
+    assert data is not None
+    assert data.default_value is True
+    assert data.visibility_mode == "editable"
+
+    kurir = config.get_system("Kurir")
+    assert kurir is not None
+    assert kurir.child_label == "Skydd"
+    assert [option.option_value for option in kurir.options] == ["KLAR", "TTA"]
+    assert kurir.qualifiers == ()
+
+    telefon = config.get_system("Telefon")
+    assert telefon is not None
+    assert telefon.options == ()
+    assert [qualifier.qualifier_key for qualifier in telefon.qualifiers] == ["data", "encrypted"]
 
 
 def test_loader_keeps_cached_config_until_explicit_reload(
@@ -206,7 +216,7 @@ def test_runtime_system_can_find_nested_option_by_ordered_value_path(
     assert ra180 is not None
     assert ra180.find_option_by_path(()) is None
     assert ra180.find_option_by_path(("1",)) is not None
-    assert ra180.find_option_by_path(("1",)).option_label == "Channel 1"
+    assert ra180.find_option_by_path(("1",)).option_label == "Kanal 1"
     assert ra180.find_option_by_path(("1", "DATA")) is not None
     assert ra180.find_option_by_path(("1", "DATA")).option_label == "Data Route"
     nested_option = ra180.find_option_by_path(("1", "DATA", "ALT"))
@@ -279,7 +289,7 @@ def test_runtime_system_can_find_option_by_stored_id_across_nested_tree(
     top_level_option = ra180.find_option_by_id(channel_one_id)
     assert top_level_option is not None
     assert top_level_option.option_value == "1"
-    assert top_level_option.option_label == "Channel 1"
+    assert top_level_option.option_label == "Kanal 1"
 
     middle_option = ra180.find_option_by_id(data_id)
     assert middle_option is not None

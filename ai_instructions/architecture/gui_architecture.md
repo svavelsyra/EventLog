@@ -42,6 +42,11 @@ The startup dialog is the current reference pattern for a dynamic Tk dialog whos
 - **Presenter** owns startup flow decisions, prefill values, dynamic field selection, and recomputed dialog state.
 - **Controller** is a thin Tk/app adapter: it reads one structured submission from the view, calls presenter methods, renders the returned state, and wires app-owned callbacks such as close/reset/browse flows.
 
+For the current local SQLite model specifically:
+- the active database location is one fixed app-owned managed path,
+- ordinary startup should not expose arbitrary database-target selection,
+- and `Nollställ` should route the running app back to fresh startup state rather than creating a separate exit-only reset contract.
+
 **Preferred seam objects**:
 - `StartupDialogState` = presenter → view render contract
 - `StartupDialogSubmission` = view → presenter readback contract
@@ -58,7 +63,7 @@ The startup dialog is the current reference pattern for a dynamic Tk dialog whos
 **Why this is the preferred pattern**:
 - prefill flows through one render contract instead of special-case setters,
 - user-entered values flow back through one submission contract instead of one getter per field,
-- presenter logic stays the authority for mode/field visibility and remembered-target behavior,
+- presenter logic stays the authority for mode/field visibility and managed-startup-target behavior,
 - the view remains thin even when fields are backend-driven and dynamic.
 
 ### Startup Dialog Guardrails
@@ -68,7 +73,7 @@ For dynamic dialogs like startup, treat the following as exceptions that require
 - adding one getter/setter per field,
 - adding hidden submission booleans that duplicate field-contract facts,
 - adding one callback-registration method per widget event when a smaller binding seam would do,
-- moving recomputation of visible fields or startup mode into the controller,
+- moving recomputation of visible fields, managed-target startup state, or startup mode into the controller,
 - leaking GUI presentation details such as labels or browse semantics downward into persistence contracts.
 
 The startup dialog may still keep a few field-oriented helper methods where Tk-specific behavior genuinely benefits from that seam, but the architectural default is **render whole state, read whole submission, keep controller thin**.

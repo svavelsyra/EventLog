@@ -1,5 +1,5 @@
 -- EventLog Database Schema
--- Database Version: 0.1.2 (adds runtime user_preferences foundation for Epic 005.002)
+-- Database Version: 0.1.3 (allows approved blank Communication soft-save fields for Story 006.002)
 -- Last Updated: 2026-05-11
 --
 -- This is the INITIAL schema for NEW databases.
@@ -25,12 +25,12 @@ CREATE TABLE IF NOT EXISTS communication_entries (
                                                  -- When the operator logged it (ISO 8601)
 
     -- Message content
-    message_content TEXT NOT NULL CHECK (message_content != ''),
+    message_content TEXT NOT NULL,
     from_field TEXT NULL,                        -- Sender/source
     to_field TEXT NULL,                          -- Recipient/destination
 
     -- Operator metadata
-    operator TEXT NOT NULL CHECK (operator != ''),
+    operator TEXT NOT NULL,
     confirmed INTEGER NOT NULL DEFAULT 0 CHECK (confirmed IN (0, 1)),
     edited INTEGER NOT NULL DEFAULT 0 CHECK (edited IN (0, 1)),
 
@@ -226,10 +226,11 @@ INSERT OR IGNORE INTO communication_systems (
     is_active
 )
 VALUES
-    ('RA180', 'Radio System', 'Channel', 10, 1),
-    ('Motorola', 'Radio System', 'Channel', 20, 1),
-    ('Rakel', 'Radio System', 'Channel', 30, 1),
-    ('Courier', 'Courier', NULL, 40, 1);
+    ('RA180', 'Radio System', 'Kanal', 10, 1),
+    ('Motorola', 'Radio System', 'Kanal', 20, 1),
+    ('Rakel', 'Radio System', 'Talgrupp', 30, 1),
+    ('Kurir', 'Kurir', 'Skydd', 40, 1),
+    ('Telefon', 'Telefon', NULL, 50, 1);
 
 INSERT OR IGNORE INTO communication_options (
     communication_system_id,
@@ -241,24 +242,27 @@ INSERT OR IGNORE INTO communication_options (
     is_active
 )
 VALUES
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '1', 'Channel 1', NULL, NULL, 10, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '2', 'Channel 2', NULL, NULL, 20, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '3', 'Channel 3', NULL, NULL, 30, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '4', 'Channel 4', NULL, NULL, 40, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '5', 'Channel 5', NULL, NULL, 50, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '6', 'Channel 6', NULL, NULL, 60, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '7', 'Channel 7', NULL, NULL, 70, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '8', 'Channel 8', NULL, NULL, 80, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '1', 'Channel 1', NULL, NULL, 10, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '2', 'Channel 2', NULL, NULL, 20, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '3', 'Channel 3', NULL, NULL, 30, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '4', 'Channel 4', NULL, NULL, 40, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '5', 'Channel 5', NULL, NULL, 50, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '6', 'Channel 6', NULL, NULL, 60, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '7', 'Channel 7', NULL, NULL, 70, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '8', 'Channel 8', NULL, NULL, 80, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'X', 'Talkgroup X', NULL, NULL, 10, 1),
-    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'Y', 'Talkgroup Y', NULL, NULL, 20, 1);
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '1', 'Kanal 1', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '2', 'Kanal 2', NULL, NULL, 20, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '3', 'Kanal 3', NULL, NULL, 30, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '4', 'Kanal 4', NULL, NULL, 40, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '5', 'Kanal 5', NULL, NULL, 50, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '6', 'Kanal 6', NULL, NULL, 60, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '7', 'Kanal 7', NULL, NULL, 70, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'RA180'), '8', 'Kanal 8', NULL, NULL, 80, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '1', 'Kanal 1', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '2', 'Kanal 2', NULL, NULL, 20, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '3', 'Kanal 3', NULL, NULL, 30, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '4', 'Kanal 4', NULL, NULL, 40, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '5', 'Kanal 5', NULL, NULL, 50, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '6', 'Kanal 6', NULL, NULL, 60, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '7', 'Kanal 7', NULL, NULL, 70, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Motorola'), '8', 'Kanal 8', NULL, NULL, 80, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'BATALJON', 'Bataljon', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'KOMPANI', 'Kompani', NULL, NULL, 20, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Rakel'), 'ANDRA', 'Andra', NULL, NULL, 30, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Kurir'), 'KLAR', 'Klar', NULL, NULL, 10, 1),
+    ((SELECT id FROM communication_systems WHERE system_name = 'Kurir'), 'TTA', 'TTA', NULL, NULL, 20, 1);
 
 INSERT OR IGNORE INTO communication_qualifiers_config (
     communication_system_id,
@@ -277,8 +281,8 @@ VALUES
         'Krypterad',
         'boolean',
         NULL,
-        'false',
-        'RA180 can be logged as clear or encrypted traffic.',
+        'true',
+        'Markera när RA180-trafiken var krypterad.',
         'editable'
     ),
     (
@@ -287,8 +291,8 @@ VALUES
         'Data',
         'boolean',
         NULL,
-        'false',
-        'Mark when the RA180 path was used with attached data equipment.',
+        'true',
+        'Markera när RA180 användes med datautrustning.',
         'editable'
     ),
     (
@@ -298,7 +302,7 @@ VALUES
         'boolean',
         NULL,
         'false',
-        'Motorola is treated as clear-only in the Phase 1 defaults.',
+        'Motorola behandlas som klartext i standardinställningen.',
         'forced'
     ),
     (
@@ -308,17 +312,27 @@ VALUES
         'boolean',
         NULL,
         'true',
-        'Rakel is treated as encrypted-only in the Phase 1 defaults.',
+        'Rakel behandlas som krypterad i standardinställningen.',
         'forced'
     ),
     (
-        (SELECT id FROM communication_systems WHERE system_name = 'Courier'),
+        (SELECT id FROM communication_systems WHERE system_name = 'Telefon'),
         'encrypted',
         'Krypterad',
         'boolean',
         NULL,
         'false',
-        'Courier keeps the shared qualifier model without exposing radio-only choices.',
-        'hidden'
+        'Markera när telefontrafiken var skyddad eller krypterad.',
+        'editable'
+    ),
+    (
+        (SELECT id FROM communication_systems WHERE system_name = 'Telefon'),
+        'data',
+        'Data',
+        'boolean',
+        NULL,
+        'false',
+        'Markera när telefonförbindelsen användes för data.',
+        'editable'
     );
 

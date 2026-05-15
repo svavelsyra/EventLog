@@ -2,7 +2,7 @@
 
 **Purpose**: SQLite-specific lessons, query patterns, and database implementation pitfalls learned during development.
 
-**Last Updated**: 2026-05-05 (Session 088 - Added communication portability import/apply ownership lesson)
+**Last Updated**: 2026-05-15 (Session 138 - Restored SQLite managed-target ownership to DB seam)
 
 ## Session 032 - Repository Settings Bootstrap
 
@@ -53,6 +53,30 @@
 
 - For reset-flow integration coverage, prefer temporary on-disk SQLite databases over `:memory:` so the test can exercise the real close/invalidate/delete sequence and confirm file-backed cleanup behavior.
 - Cover credential-mode combinations explicitly in reset integration tests: no password/no key file, password only, password plus key file, and key-file only.
+
+## Session 119 - Reset Tests Must Never Touch The Workspace Config
+
+- Any test path that can clear remembered bootstrap selectors or delete runtime-known log artifacts must pass an explicit temporary `config_path` under `tmp_path`.
+- Do not let reset-path tests fall back to `src.app.DEFAULT_CONFIG_PATH`; that points at the real workspace `config.ini` and can wipe the operator's remembered database target during `python -m pytest`.
+
+## Session 122 - Startup Mode Filesystem Checks Must Stay Backend-Owned
+
+- If a backend policy decides whether a target should open in create or unlock mode based on on-disk state, keep the actual `os.path.exists(...)` call inside the backend-owned policy implementation.
+- Do not thread a generic `PathExists` protocol or similar filesystem predicate through shared startup contracts, presenter helpers, or controller wiring just to make tests convenient.
+- Tests that need alternate on-disk behavior should patch the backend-owned stdlib call or inject a presenter-level mode resolver, rather than reshaping the production contract around filesystem doubles.
+
+## Session 123 - Seeded Communication Baseline Must Stay Exact
+
+- Treat the default communication configuration as a locked seeded baseline, not just a loose demo example.
+- The standard seeded/runtime/template baseline is: `RA180`, `Motorola`, `Rakel`, `Kurir`, `Telefon`.
+- Keep the operator-facing labels Swedish in the seeded baseline: `Kanal`, `Talgrupp`, and `Skydd`.
+- Preserve these baseline-specific defaults unless the user explicitly changes the standard again:
+  - `RA180`: channels `1-8`, editable `encrypted=true`, editable `data=true`
+  - `Motorola`: channels `1-8`, forced `encrypted=false`
+  - `Rakel`: `BATALJON`, `KOMPANI`, `ANDRA`, forced `encrypted=true`
+  - `Kurir`: `KLAR`, `TTA`, no baseline qualifiers
+  - `Telefon`: no options, editable `encrypted=false`, editable `data=false`
+- When the baseline changes, update the SQLite seed data, the portability template/export expectations, and direct-dependent tests together in one coherent pass.
 
 ## Expected Content Areas
 

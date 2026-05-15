@@ -66,16 +66,20 @@ The application is no longer designed around one generic message-log entry. The 
 - `config.ini` is a convenience layer only. It may remember UI state, creation defaults, and last-used bootstrap hints, but it is not security authority.
 - For bootstrap/security-related config, `[DEFAULT]` is the shared inherited fallback layer. Ordinary sections still exist alongside it; technology sections hold remembered target details and may override shared values when needed.
 - Remembered startup hints for an existing database target must stay separate from create-time admin policy inputs for new databases. Example: whether the last-used database needed a key file is bootstrap memory, while whether new databases must use a key file is a creation-time policy/default.
-- Startup must always reach a usable recovery-capable create/select flow, even when remembered bootstrap values are missing or malformed.
+- Startup must always reach a usable recovery-capable startup flow, even when remembered bootstrap values are missing or malformed.
 - Startup is technology-first: the user resolves or selects the database technology before backend-specific input fields are finalized.
 - After a technology is selected, the startup UI becomes dynamic and shows only the fields relevant for that technology.
 - The startup presenter owns those dynamic decisions and may recompute the dialog repeatedly as the operator changes selections or paths.
 - The startup view should therefore be driven by a whole-dialog render contract and a structured readback contract, rather than one getter/setter per startup field.
 - Remembered values and presenter-owned defaults should enter the UI through the rendered startup state, while current operator-entered values should be read back through one submission object.
-- In the current SQLite realization, create versus open is inferred from whether the selected target already exists, so the generic startup shell should not expose a separate global new/load selector.
-- Remembered values may prefill the startup UI, but the user must be able to change them or ignore them.
-- Current SQLite/file-path/key-file behavior is a Phase 1 realization of this UX, not the universal rule for all future backends.
+- In the current local SQLite realization, the app uses one fixed app-owned managed database location rather than ordinary startup-time target selection.
+- In that SQLite realization, create versus open is inferred from whether the managed database already exists, so the generic startup shell should not expose a separate global new/load selector.
+- Remembered values may still prefill technology or credential hints, but they do not change the managed SQLite location.
+- If the operator wants to preserve an old local SQLite database copy, the intended workflow is to manually move/copy it out of the managed location before creating a new one.
+- Current SQLite managed-location/key-file behavior is a Phase 1 realization of this UX, not the universal rule for all future backends.
 - Emergency `Nollställ` in the startup/unlock path is immediate; it must not require a secondary confirmation dialog or typed confirmation phrase.
+- After `Nollställ`, the preferred current direction is to return the running app to fresh startup state in-process rather than forcing a full process exit.
+- See `docs/startup_dialog_rework_plan.md` for the current findings, agreed single-database local-SQLite direction, and staged implementation plan for the startup-dialog rework.
 
 ### Security Helper and Ownership Design
 - Shared security code should stay small, explicit, and auditable.

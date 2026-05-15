@@ -1,5 +1,6 @@
 # EventLog Application Configuration Template
-# Copy this to config.ini and customize for your installation
+# Copy this to data/config.ini and customize for your installation
+# The default live runtime config is app-local under the data/ folder.
 
 [DEFAULT]
 # Shared fallback values for bootstrap/security-related settings.
@@ -37,6 +38,8 @@ kdf_iterations = 100000
 # SQLite-specific overrides for shared [DEFAULT] values may also be added here if needed.
 # These values help prefill the startup UI, but they are not authoritative and
 # must never prevent recovery-capable startup if they are missing or malformed.
+# With the default live config at data/config.ini, the managed runtime SQLite
+# database lives beside it as data/eventlog.db.
 
 # Remembered last-used SQLite database target/path.
 database_path = eventlog.db
@@ -57,6 +60,8 @@ log_level = INFO
 
 # File logging
 file_logging_enabled = true
+# With the default live config at data/config.ini, this relative path resolves
+# to data/logs/eventlog.log.
 log_file_path = logs/eventlog.log
 log_file_max_bytes = 10485760  # 10 MB per file
 log_file_backup_count = 5  # Keep 5 old log files (total ~50 MB)

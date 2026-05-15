@@ -106,9 +106,9 @@ def test_execute_schema_file_is_idempotent(connection: sqlite3.Connection) -> No
     assert _get_schema_object_names(connection, "index") == EXPECTED_INDEXES
     assert _get_table_row_count(connection, "settings") == 1
     assert _get_table_row_count(connection, "user_preferences") == 0
-    assert _get_table_row_count(connection, "communication_systems") == 4
-    assert _get_table_row_count(connection, "communication_options") == 18
-    assert _get_table_row_count(connection, "communication_qualifiers_config") == 5
+    assert _get_table_row_count(connection, "communication_systems") == 5
+    assert _get_table_row_count(connection, "communication_options") == 21
+    assert _get_table_row_count(connection, "communication_qualifiers_config") == 6
 
 
 def test_schema_applies_default_values(initialized_connection: sqlite3.Connection) -> None:
@@ -184,37 +184,42 @@ def test_schema_seeds_operational_configuration_defaults(
     ).fetchall()
 
     assert system_rows == [
-        ("RA180", "Radio System", "Channel", 10, 1),
-        ("Motorola", "Radio System", "Channel", 20, 1),
-        ("Rakel", "Radio System", "Channel", 30, 1),
-        ("Courier", "Courier", None, 40, 1),
+        ("RA180", "Radio System", "Kanal", 10, 1),
+        ("Motorola", "Radio System", "Kanal", 20, 1),
+        ("Rakel", "Radio System", "Talgrupp", 30, 1),
+        ("Kurir", "Kurir", "Skydd", 40, 1),
+        ("Telefon", "Telefon", None, 50, 1),
     ]
     assert option_rows == [
-        ("RA180", "1", "Channel 1", 10, 1),
-        ("RA180", "2", "Channel 2", 20, 1),
-        ("RA180", "3", "Channel 3", 30, 1),
-        ("RA180", "4", "Channel 4", 40, 1),
-        ("RA180", "5", "Channel 5", 50, 1),
-        ("RA180", "6", "Channel 6", 60, 1),
-        ("RA180", "7", "Channel 7", 70, 1),
-        ("RA180", "8", "Channel 8", 80, 1),
-        ("Motorola", "1", "Channel 1", 10, 1),
-        ("Motorola", "2", "Channel 2", 20, 1),
-        ("Motorola", "3", "Channel 3", 30, 1),
-        ("Motorola", "4", "Channel 4", 40, 1),
-        ("Motorola", "5", "Channel 5", 50, 1),
-        ("Motorola", "6", "Channel 6", 60, 1),
-        ("Motorola", "7", "Channel 7", 70, 1),
-        ("Motorola", "8", "Channel 8", 80, 1),
-        ("Rakel", "X", "Talkgroup X", 10, 1),
-        ("Rakel", "Y", "Talkgroup Y", 20, 1),
+        ("RA180", "1", "Kanal 1", 10, 1),
+        ("RA180", "2", "Kanal 2", 20, 1),
+        ("RA180", "3", "Kanal 3", 30, 1),
+        ("RA180", "4", "Kanal 4", 40, 1),
+        ("RA180", "5", "Kanal 5", 50, 1),
+        ("RA180", "6", "Kanal 6", 60, 1),
+        ("RA180", "7", "Kanal 7", 70, 1),
+        ("RA180", "8", "Kanal 8", 80, 1),
+        ("Motorola", "1", "Kanal 1", 10, 1),
+        ("Motorola", "2", "Kanal 2", 20, 1),
+        ("Motorola", "3", "Kanal 3", 30, 1),
+        ("Motorola", "4", "Kanal 4", 40, 1),
+        ("Motorola", "5", "Kanal 5", 50, 1),
+        ("Motorola", "6", "Kanal 6", 60, 1),
+        ("Motorola", "7", "Kanal 7", 70, 1),
+        ("Motorola", "8", "Kanal 8", 80, 1),
+        ("Rakel", "BATALJON", "Bataljon", 10, 1),
+        ("Rakel", "KOMPANI", "Kompani", 20, 1),
+        ("Rakel", "ANDRA", "Andra", 30, 1),
+        ("Kurir", "KLAR", "Klar", 10, 1),
+        ("Kurir", "TTA", "TTA", 20, 1),
     ]
     assert qualifier_rows == [
-        ("RA180", "data", "Data", "boolean", "false", "editable"),
-        ("RA180", "encrypted", "Krypterad", "boolean", "false", "editable"),
+        ("RA180", "data", "Data", "boolean", "true", "editable"),
+        ("RA180", "encrypted", "Krypterad", "boolean", "true", "editable"),
         ("Motorola", "encrypted", "Krypterad", "boolean", "false", "forced"),
         ("Rakel", "encrypted", "Krypterad", "boolean", "true", "forced"),
-        ("Courier", "encrypted", "Krypterad", "boolean", "false", "hidden"),
+        ("Telefon", "data", "Data", "boolean", "false", "editable"),
+        ("Telefon", "encrypted", "Krypterad", "boolean", "false", "editable"),
     ]
 
 
@@ -235,13 +240,6 @@ def test_communication_entries_do_not_depend_on_live_config_foreign_keys(
 @pytest.mark.parametrize(
     ("statement", "params"),
     [
-        (
-            """
-            INSERT INTO communication_entries (message_content, logged_time, operator)
-            VALUES (?, ?, ?)
-            """,
-            ("", "2026-04-27T10:00:00", "Operator One"),
-        ),
         (
             """
             INSERT INTO event_entries (event_description, logged_time, operator)
@@ -265,6 +263,18 @@ def test_schema_rejects_empty_required_text_fields(
 ) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         initialized_connection.execute(statement, params)
+
+
+def test_schema_allows_blank_communication_message_and_operator_for_soft_save_flow(
+    initialized_connection: sqlite3.Connection,
+) -> None:
+    initialized_connection.execute(
+        """
+        INSERT INTO communication_entries (message_content, logged_time, operator)
+        VALUES (?, ?, ?)
+        """,
+        ("", "2026-04-27T10:00:00", ""),
+    )
 
 
 @pytest.mark.parametrize(

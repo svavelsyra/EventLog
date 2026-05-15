@@ -1,10 +1,14 @@
 import pytest
+from pathlib import Path
 from typing import cast
 
 from src.core.communication_config import CommunicationConfigLoader, CommunicationConfigSource
 from src.core.communication_portability import (
+    build_communication_portability_template_bundle,
+    COMMUNICATION_PORTABILITY_EXPORT_FILENAME,
     COMMUNICATION_PORTABILITY_BUNDLE_KIND,
     COMMUNICATION_PORTABILITY_BUNDLE_VERSION,
+    COMMUNICATION_PORTABILITY_TEMPLATE_FILENAME,
     CommunicationPortabilityBundle,
     CommunicationPortabilityContractError,
     EXCLUDED_COMMUNICATION_PORTABILITY_DOMAINS,
@@ -14,9 +18,15 @@ from src.core.communication_portability import (
     PortableCommunicationSystem,
     build_communication_portability_bundle,
     export_communication_portability_payload,
+    import_communication_portability_file,
     import_communication_portability_payload,
+    load_communication_portability_payload,
     parse_communication_portability_payload,
+    render_communication_portability_export,
+    render_communication_portability_template,
     validate_communication_portability_payload,
+    write_communication_portability_export,
+    write_communication_portability_template,
 )
 from src.db.repositories.sqlite.event_log_repository import EventLogRepository
 from src.db.sqlite_adapter import SQLiteAdapter
@@ -139,13 +149,13 @@ def _add_nested_portability_config(repository: EventLogRepository) -> None:
         )
         """,
         (
-            "Courier",
+            "Kurir",
             "delivery_mode",
             "Leveranssätt",
             "enum",
             '["oral", "written"]',
             "written",
-            "How the courier delivered the message.",
+            "How the kurir delivered the message.",
             "editable",
         ),
     )
@@ -316,8 +326,8 @@ def test_validate_payload_rejects_unapproved_nested_fields() -> None:
         "portable_domains": list(PORTABLE_COMMUNICATION_DOMAINS),
         "communication_systems": [
             {
-                "system_name": "Courier",
-                "system_type": "Courier",
+                "system_name": "Kurir",
+                "system_type": "Kurir",
                 "child_label": None,
                 "sort_order": None,
                 "options": [],
@@ -345,19 +355,23 @@ def test_build_portability_bundle_exports_seeded_runtime_config_deterministicall
         "RA180",
         "Motorola",
         "Rakel",
-        "Courier",
+        "Kurir",
+        "Telefon",
     ]
     ra180 = bundle.communication_systems[0]
     assert ra180.system_type == "Radio System"
     assert [option.option_value for option in ra180.options[:3]] == ["1", "2", "3"]
     assert [qualifier.qualifier_key for qualifier in ra180.qualifiers] == ["data", "encrypted"]
+    assert [qualifier.default_value for qualifier in ra180.qualifiers] == [True, True]
 
-    courier = bundle.communication_systems[-1]
-    assert courier.system_name == "Courier"
-    assert courier.options == ()
-    assert len(courier.qualifiers) == 1
-    assert courier.qualifiers[0].qualifier_key == "encrypted"
-    assert courier.qualifiers[0].visibility_mode == "hidden"
+    kurir = bundle.communication_systems[3]
+    assert kurir.system_name == "Kurir"
+    assert [option.option_value for option in kurir.options] == ["KLAR", "TTA"]
+    assert kurir.qualifiers == ()
+
+    telefon = bundle.communication_systems[-1]
+    assert telefon.system_name == "Telefon"
+    assert [qualifier.qualifier_key for qualifier in telefon.qualifiers] == ["data", "encrypted"]
 
     assert payload["portable_domains"] == list(PORTABLE_COMMUNICATION_DOMAINS)
     communication_system_payloads = cast(list[dict[str, object]], payload["communication_systems"])
@@ -383,6 +397,47 @@ def test_build_portability_bundle_supports_empty_runtime_config(
     validate_communication_portability_payload(payload)
 
 
+def test_render_and_write_template_emit_canonical_example_bundle_json(tmp_path: Path) -> None:
+    template_text = render_communication_portability_template()
+    template_path = tmp_path / COMMUNICATION_PORTABILITY_TEMPLATE_FILENAME
+
+    written_path = write_communication_portability_template(template_path)
+    loaded_payload = load_communication_portability_payload(template_path)
+    template_bundle = build_communication_portability_template_bundle()
+
+    assert written_path == template_path
+    assert template_text == template_path.read_text(encoding="utf-8")
+    assert loaded_payload == template_bundle.to_payload()
+    assert [system["system_name"] for system in cast(list[dict[str, object]], loaded_payload["communication_systems"])] == [
+        "RA180",
+        "Motorola",
+        "Rakel",
+        "Kurir",
+        "Telefon",
+    ]
+    ra180_payload = cast(list[dict[str, object]], loaded_payload["communication_systems"])[0]
+    assert ra180_payload["child_label"] == "Kanal"
+    assert cast(list[dict[str, object]], ra180_payload["options"])[0]["child_label"] is None
+    assert cast(list[dict[str, object]], loaded_payload["communication_systems"])[2]["child_label"] == "Talgrupp"
+    assert cast(list[dict[str, object]], loaded_payload["communication_systems"])[3]["child_label"] == "Skydd"
+
+
+def test_render_and_write_export_emit_canonical_runtime_bundle_json(
+    repository: EventLogRepository,
+    tmp_path: Path,
+) -> None:
+    loader = CommunicationConfigLoader(_as_config_source(repository))
+    export_path = tmp_path / COMMUNICATION_PORTABILITY_EXPORT_FILENAME
+
+    export_text = render_communication_portability_export(loader.get_config())
+    written_path = write_communication_portability_export(export_path, loader.get_config())
+    loaded_payload = load_communication_portability_payload(export_path)
+
+    assert written_path == export_path
+    assert export_text == export_path.read_text(encoding="utf-8")
+    assert loaded_payload == export_communication_portability_payload(loader.get_config())
+
+
 def test_build_portability_bundle_preserves_nested_options_and_enum_qualifier_fields(
     repository: EventLogRepository,
 ) -> None:
@@ -399,20 +454,17 @@ def test_build_portability_bundle_preserves_nested_options_and_enum_qualifier_fi
     assert nested_option.children[0].option_value == "ALT"
     assert nested_option.children[0].option_label == "Alternate Route"
 
-    courier = bundle.communication_systems[-1]
-    assert [qualifier.qualifier_key for qualifier in courier.qualifiers] == [
-        "delivery_mode",
-        "encrypted",
-    ]
-    delivery_mode = courier.qualifiers[0]
+    kurir = bundle.communication_systems[3]
+    assert [qualifier.qualifier_key for qualifier in kurir.qualifiers] == ["delivery_mode"]
+    delivery_mode = kurir.qualifiers[0]
     assert delivery_mode.valid_values == ("oral", "written")
     assert delivery_mode.default_value == "written"
-    assert delivery_mode.help_text == "How the courier delivered the message."
+    assert delivery_mode.help_text == "How the kurir delivered the message."
 
-    courier_payload = cast(list[dict[str, object]], payload["communication_systems"])[-1]
-    courier_qualifier_payloads = cast(list[dict[str, object]], courier_payload["qualifiers"])
-    assert courier_qualifier_payloads[0]["valid_values"] == ["oral", "written"]
-    assert courier_qualifier_payloads[0]["default_value"] == "written"
+    kurir_payload = cast(list[dict[str, object]], payload["communication_systems"])[3]
+    kurir_qualifier_payloads = cast(list[dict[str, object]], kurir_payload["qualifiers"])
+    assert kurir_qualifier_payloads[0]["valid_values"] == ["oral", "written"]
+    assert kurir_qualifier_payloads[0]["default_value"] == "written"
     validate_communication_portability_payload(payload)
 
 
@@ -450,7 +502,7 @@ def test_import_payload_applies_bundle_and_reloads_runtime_from_database(
     repository: EventLogRepository,
 ) -> None:
     loader = CommunicationConfigLoader(_as_config_source(repository))
-    assert loader.get_config().system_names == ("RA180", "Motorola", "Rakel", "Courier")
+    assert loader.get_config().system_names == ("RA180", "Motorola", "Rakel", "Kurir", "Telefon")
 
     payload = _build_import_payload()
 
@@ -472,6 +524,37 @@ def test_import_payload_applies_bundle_and_reloads_runtime_from_database(
     assert [qualifier.qualifier_key for qualifier in imported_system.qualifiers] == ["encrypted"]
     assert imported_system.qualifiers[0].default_value is False
     assert loader.get_config().system_names == ("Field Telephone",)
+
+
+def test_import_file_applies_bundle_and_reloads_runtime_from_database(tmp_path: Path) -> None:
+    source_repository = EventLogRepository(SQLiteAdapter(":memory:"))
+    target_repository = EventLogRepository(SQLiteAdapter(":memory:"))
+
+    try:
+        _add_nested_portability_config(source_repository)
+        source_loader = CommunicationConfigLoader(_as_config_source(source_repository))
+        export_path = tmp_path / COMMUNICATION_PORTABILITY_EXPORT_FILENAME
+        write_communication_portability_export(
+            export_path,
+            source_loader.get_config(force_reload=True),
+        )
+
+        target_loader = CommunicationConfigLoader(_as_config_source(target_repository))
+        result = import_communication_portability_file(
+            export_path,
+            import_target=target_repository,
+            config_loader=target_loader,
+        )
+
+        assert export_communication_portability_payload(result.config) == load_communication_portability_payload(
+            export_path
+        )
+        assert export_communication_portability_payload(
+            target_loader.get_config(force_reload=True)
+        ) == load_communication_portability_payload(export_path)
+    finally:
+        source_repository.close()
+        target_repository.close()
 
 
 def test_import_payload_rejects_invalid_qualifier_contract_before_database_apply(

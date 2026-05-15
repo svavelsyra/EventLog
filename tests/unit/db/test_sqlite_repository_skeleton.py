@@ -176,6 +176,19 @@ def test_repository_supports_file_backed_database_path(tmp_path: Path) -> None:
         repository.close()
 
 
+def test_repository_creates_missing_parent_directory_for_file_backed_database_path(tmp_path: Path) -> None:
+    database_path = tmp_path / "data" / "eventlog.db"
+
+    repository = EventLogRepository(SQLiteAdapter(database_path))
+    try:
+        assert database_path.parent.is_dir()
+        assert database_path.is_file()
+        assert repository.database_path == str(database_path)
+        assert _get_table_names(repository) == EXPECTED_TABLES
+    finally:
+        repository.close()
+
+
 def test_sqlite_adapter_rejects_existing_plaintext_database_without_eventlog_profile_metadata(
     tmp_path: Path,
 ) -> None:

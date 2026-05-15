@@ -79,8 +79,8 @@ kdf_iterations = 100000
 **Technology Section** (Remembered startup hints plus optional overrides; section shape may differ by technology):
 ```ini
 [sqlite]
-# Remembered last-used SQLite database target/path for startup convenience
-database_path = eventlog.db
+# Current local SQLite note: the active database location is one fixed app-owned
+# managed path, so ordinary startup does not remember a user-chosen database path.
 
 # Whether the remembered last-used SQLite database used key-file mode
 # NOTE: This is startup memory, not security authority
@@ -139,8 +139,7 @@ CREATE INDEX idx_security_config_key ON security_config(key);
 
 **Bootstrap Memory Settings** (In config.ini, not database):
 - `[DEFAULT].db_type`: Remembered/selected database technology for startup prefill
-- technology-section target field such as `[sqlite].database_path`: Remembered last-used target/path for startup prefill
-- technology-section `require_key_file`: Remembered last-used unlock mode hint for startup prefill
+- technology-section hints such as `[sqlite].require_key_file`: Remembered unlock-mode hint for startup prefill
 
 **Security Settings NOT Stored** (Never stored anywhere):
 - ~~`last_key_file_path`~~: **Never stored** - would leak key file location if device captured. Steganographic security requires key file to remain unknown.
@@ -161,8 +160,9 @@ INSERT INTO security_config (key, value, description) VALUES
 ```
 
 **Config.ini Examples**:
+
+Operational mode (maximum security):
 ```ini
-# Operational mode (maximum security)
 [DEFAULT]
 db_type = sqlite
 require_key_file_for_creation = true
@@ -171,10 +171,12 @@ secure_delete_passes = 3
 kdf_iterations = 100000
 
 [sqlite]
-database_path = eventlog.db
+# Active local SQLite path is app-owned and fixed for the current product shape
 require_key_file = true
+```
 
-# Training mode (simplified)
+Training mode (simplified):
+```ini
 [DEFAULT]
 db_type = sqlite
 require_key_file_for_creation = false
@@ -183,7 +185,6 @@ secure_delete_passes = 1
 kdf_iterations = 100000  # Current recommended default
 
 [sqlite]
-database_path = eventlog_training.db
 require_key_file = false
 ```
 
@@ -193,11 +194,11 @@ require_key_file = false
 - `kdf_iterations` (in config.ini): Must be a positive integer; `100000` remains the current recommended default for new databases
 
 **Config.ini Validation**:
-- `[DEFAULT].db_type` and the selected technology section's remembered target fields are startup hints, not application-start prerequisites
+- `[DEFAULT].db_type` and technology-section remembered startup hints are startup conveniences, not application-start prerequisites
 - `[DEFAULT].require_key_file_for_creation` is a create-time policy/default input, not remembered startup memory for existing databases
-- Missing remembered bootstrap values => startup falls back to manual create/select flow
+- Missing remembered bootstrap values => startup falls back to a usable recovery-capable flow for the selected technology and managed app-owned state
 - Partially malformed remembered bootstrap values => preserve usable values, discard invalid ones, keep startup UI usable
-- Completely unusable remembered bootstrap values => ignore them and fall back to manual create/select flow
+- Completely unusable remembered bootstrap values => ignore them and fall back to that same recovery-capable startup flow
 
 **Access Pattern**:
 - Read by key, returning a caller-supplied default when the key is absent.
@@ -342,13 +343,19 @@ These rules are generic and apply regardless of which backend technology is sele
 - Remembered config values may prefill the startup UI, but they are not authoritative.
 - Once the technology is selected, the UI becomes dynamic and shows only the fields relevant for that technology.
 - The selected technology defines which target fields, file pickers, credential inputs, and readiness checks are required.
-- Missing or malformed remembered bootstrap memory must fall back to a usable create/select recovery path.
+- Missing or malformed remembered bootstrap memory must fall back to a usable recovery-capable startup path.
 - The create flow should validate the operator's selected setup against admin-defined policy for allowed technologies and credential combinations.
 - The GUI should clearly distinguish between what is allowed and what is merely recommended.
 
 ### Current SQLite/SQLCipher Realization
 
 The detailed dialog layouts below are **current-phase SQLite/SQLCipher examples**, not the universal startup UI contract for all future backends.
+
+For the current local SQLite model, EventLog uses one fixed app-owned managed database location.
+- Ordinary operators do not choose arbitrary database paths during startup in this mode.
+- If the managed database exists, startup enters unlock/open flow for that location.
+- If the managed database does not exist, startup enters create flow for that same managed location.
+- If the operator wants to preserve an old database copy, the expected workflow is to manually move/copy it out of the managed location before creating a new one.
 
 **Case 1: Current SQLite/SQLCipher Example - Create New Database**
 
@@ -375,13 +382,13 @@ The detailed dialog layouts below are **current-phase SQLite/SQLCipher examples*
 ```
 
 **Behavior**:
-- No remembered database target exists, or the user intentionally starts from an empty create/select flow
-- Startup UI begins with safe defaults or empty selections
+- The managed local SQLite database path does not currently exist
+- Startup UI begins in create flow for the app-owned managed location
 - After the user selects the current SQLite technology, the SQLite/SQLCipher-specific create fields below become relevant
-- For SQLite, create versus unlock is inferred from whether the selected target already exists; the generic startup shell must not show a separate global create/open mode selector
+- For SQLite, create versus unlock is inferred from whether the managed target exists; the generic startup shell must not show a separate global create/open mode selector
 - User may choose no credentials, password only, key file only, or key file + password, subject to current admin policy and SQLite support
 - Password confirmation required (must match)
-- [Skapa] button creates new encrypted database
+- [Skapa] button creates a new encrypted database at the managed location
 - On success, save remembered startup hints in `config.ini` so the next startup can prefill the UI
 
 **Validation**:
@@ -414,12 +421,12 @@ The detailed dialog layouts below are **current-phase SQLite/SQLCipher examples*
 ```
 
 **Behavior**:
-- Remembered startup hints may preselect database technology/path and whether key-file mode was used last time
-- User may keep the prefilled values, change them, or manually select another database target
+- The managed local SQLite database path currently exists
+- Any remembered startup hints only prefill technology/credential-related startup state; they do not change the managed database location
 - These controls are shown because the currently selected technology is SQLite/SQLCipher; another backend may use different fields entirely
-- For SQLite, unlock mode is reached when the selected target already exists rather than by a separate operator-picked global mode toggle
-- If the selected or remembered target uses key-file mode: Show key file picker (required)
-- If the selected or remembered target does not use key-file mode: Hide key file picker (password only)
+- For SQLite, unlock mode is reached when the managed target exists rather than by a separate operator-picked global mode toggle
+- If the managed target uses key-file mode: Show key file picker (required)
+- If the managed target does not use key-file mode: Hide key file picker (password only)
 - **[Nollställ] button**: Allows emergency data destruction without login (see below)
 - Password field accepts any characters (Unicode supported)
 - Escape key disabled (must click Avbryt to exit)
@@ -446,12 +453,12 @@ The detailed dialog layouts below are **current-phase SQLite/SQLCipher examples*
 **Case 3: Malformed Remembered Bootstrap Memory**
 
 **Behavior**:
-- Startup still reaches the create/select database UI
+- Startup still reaches a usable startup/create flow
 - Usable remembered values may still prefill the UI
 - Malformed remembered values are discarded rather than treated as authoritative
 - The application must not crash or become unusable merely because bootstrap memory is stale or malformed
 - UX details for how warnings are surfaced can evolve later, but recovery path is mandatory
-- In the current SQLite/SQLCipher path, that may mean clearing remembered path or key-file-mode hints while still letting the user select SQLite manually and continue
+- In the current SQLite/SQLCipher path, that may mean clearing remembered technology/key-file-mode hints while still letting the app continue against the same managed SQLite location
 
 ---
 
@@ -474,12 +481,14 @@ The detailed dialog layouts below are **current-phase SQLite/SQLCipher examples*
   2. Secure delete database file (if exists)
   3. Secure delete all log files
   4. Delete config.ini (removes remembered bootstrap memory such as `require_key_file`)
-  6. Show success: "NOLLSTÄLLD OK!" or "MISSLYCKADES NOLLSTÄLLA!" (+ Sanitized list of failures)
-  6. Exit application (user restarts for fresh setup)
+  5. Show success: "NOLLSTÄLLD OK!" or "MISSLYCKADES NOLLSTÄLLA!" (+ Sanitized list of failures)
+  6. Return to fresh startup/create state inside the same running process
 
 **Security Benefit**: Even if password/key forgotten or device captured, operator can destroy all data without authentication.
 
 **No Login Required**: This is intentional - emergency destruction more important than authentication in this scenario.
+
+**Memory caveat**: Returning to startup without terminating the process does not imply perfect forensic-memory eradication. That is acceptable here because the project does not claim full memory-forensics protection.
 
 ---
 
@@ -626,15 +635,15 @@ This is current backend-owned behavior, not the permanent generic KDF contract.
 This subsection shows the **current SQLite/SQLCipher-oriented factory example**.
 
 The generic rule is:
-- startup resolves or confirms a technology-specific target first
+- startup resolves or confirms backend-specific startup context first
 - backend-specific readiness happens next
-- repository creation happens only after that selected target is ready
+- repository creation happens only after that startup context is ready
 
 **Location**: `src/db/repositories/repository_factory.py`
 
 **Implementation Contract**:
 - Input:
-  - user-confirmed/resolved startup target
+  - resolved startup context (for current local SQLite: the fixed managed app-owned location plus backend-relevant startup state)
   - backend-ready encryption key material
 - Behavior:
   - inspect the resolved database technology/dialect

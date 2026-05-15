@@ -9,14 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from os import PathLike
-from typing import Protocol
-
-
-class PathExists(Protocol):
-    """Structural callable protocol for filesystem existence checks."""
-
-    def __call__(self, path: str | PathLike[str]) -> bool: ...
 
 
 class StartupFieldName(StrEnum):
@@ -56,7 +48,6 @@ class StartupSelectionProfile:
     supports_database_path_field: bool = False
 
 __all__ = [
-    "PathExists",
     "StartupFieldKind",
     "StartupFieldName",
     "StartupFieldRequirement",

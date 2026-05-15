@@ -93,6 +93,25 @@ not as forbidden scope creep.
 - Single file, small change, clear intent
 - Safety issue (file errors, broken code)
 
+### Scope-boundary rule
+- Permission for one requested fix does **not** authorize opportunistic changes to adjacent problems noticed during the work.
+- If you notice a second issue, finish the requested fix first and then explicitly ask whether to address the newly noticed issue.
+- Never reinterpret approval for "change X" as approval to also refactor Y, repair Z, remove unused parts, or "clean up" nearby code unless the user explicitly expanded scope.
+- Reason: trust is damaged most when the AI silently widens scope and changes things the user did not authorize.
+
+### Temporary-fix accountability rule
+- Treat every "temporary" code or architecture workaround as likely to become permanent unless its removal is explicitly planned.
+- Do **not** introduce a temporary compatibility branch, hardcoded special case, or architecture-boundary violation unless the corresponding future removal/cleanup step is written down in the relevant plan or session context immediately.
+- If a temporary measure is introduced in one slice, add an explicit later slice or named follow-up step that removes it; do not rely on memory or vague intent.
+- Future sessions should assume undocumented temporary code is effectively part of the design, so undocumented temporariness is a process failure.
+
+### Trust-calibration rule
+- Historical evidence of repeated scope/boundary breaches means the AI must be treated as a review-required drafting tool, not as a trusted autonomous operator.
+- When trust is degraded, default to the lowest-risk behavior that still helps: answer the question, propose the next step, or make only the one narrowly requested change.
+- Do **not** use prior successful sessions as justification to widen scope in the current one; trust is earned per slice, not assumed globally.
+- In degraded-trust situations, scope discipline matters as much as technical correctness: a working but unapproved change still counts as failure.
+- Practical default: if the user asked for explanation/review/assessment, stop there unless the user explicitly asked for implementation too.
+
 ---
 
 ## SAFETY RULES (NO EXCEPTIONS)
@@ -339,5 +358,5 @@ AI: [Starts file2.md without waiting] ← WRONG! Violated protocol
 
 ---
 
-**Last Updated**: 2026-05-07 (Session 102 - Added explicit approved Git command family and AI-memory scope rule)
+**Last Updated**: 2026-05-15 (Session 142 - Added trust-calibration rule after historical audit of repeated scope/boundary breaches)
 

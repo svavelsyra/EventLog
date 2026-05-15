@@ -617,6 +617,8 @@ kdf_iterations = 100000  # Written to DB header when creating DB
 secure_delete_passes = 3  # Convenience, not security enforcement
 
 [sqlite]
+# With the default live config at data/config.ini, the managed runtime
+# SQLite database resolves beside it as data/eventlog.db.
 # Remembered last-used SQLite target for startup convenience
 database_path = eventlog.db
 

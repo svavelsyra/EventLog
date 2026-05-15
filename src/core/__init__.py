@@ -14,8 +14,10 @@ from src.core.communication_config import (
 )
 from src.core.communication_portability import (
 	build_communication_portability_bundle,
+	COMMUNICATION_PORTABILITY_EXPORT_FILENAME,
 	COMMUNICATION_PORTABILITY_BUNDLE_KIND,
 	COMMUNICATION_PORTABILITY_BUNDLE_VERSION,
+	COMMUNICATION_PORTABILITY_TEMPLATE_FILENAME,
 	EXCLUDED_COMMUNICATION_PORTABILITY_DOMAINS,
 	PORTABLE_COMMUNICATION_DOMAINS,
 	CommunicationPortabilityBundle,
@@ -23,12 +25,19 @@ from src.core.communication_portability import (
 	CommunicationPortabilityImportResult,
 	CommunicationPortabilityImportTarget,
 	export_communication_portability_payload,
+	import_communication_portability_file,
 	import_communication_portability_payload,
+	load_communication_portability_payload,
 	parse_communication_portability_payload,
 	PortableCommunicationOption,
 	PortableCommunicationQualifier,
 	PortableCommunicationSystem,
+	render_communication_portability_export,
+	render_communication_portability_payload,
+	render_communication_portability_template,
 	validate_communication_portability_payload,
+	write_communication_portability_export,
+	write_communication_portability_template,
 )
 from src.core.entries import CommunicationEntry, EventEntry, PersonnelEntry
 from src.core.reset_report import (
@@ -47,8 +56,10 @@ __all__ = [
 	"CommunicationEntry",
 	"CommunicationOptionDefinition",
 	"CommunicationOptionMutationResult",
+	"COMMUNICATION_PORTABILITY_EXPORT_FILENAME",
 	"COMMUNICATION_PORTABILITY_BUNDLE_KIND",
 	"COMMUNICATION_PORTABILITY_BUNDLE_VERSION",
+	"COMMUNICATION_PORTABILITY_TEMPLATE_FILENAME",
 	"CommunicationQualifierDefinition",
 	"CommunicationPortabilityBundle",
 	"CommunicationPortabilityContractError",
@@ -71,9 +82,16 @@ __all__ = [
 	"assemble_reset_report_from_facts",
 	"build_communication_portability_bundle",
 	"export_communication_portability_payload",
+	"import_communication_portability_file",
 	"import_communication_portability_payload",
+	"load_communication_portability_payload",
 	"normalize_reset_follow_up_issues",
 	"parse_communication_portability_payload",
+	"render_communication_portability_export",
+	"render_communication_portability_payload",
+	"render_communication_portability_template",
 	"validate_communication_portability_payload",
+	"write_communication_portability_export",
+	"write_communication_portability_template",
 ]
 

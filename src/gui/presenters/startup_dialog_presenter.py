@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from os import PathLike
-from pathlib import Path
 from typing import Callable, Mapping, cast
 
 import src.db.repositories.startup_bootstrap as startup_bootstrap_module
@@ -19,6 +18,8 @@ from src.config import DatabaseConfig
 from src.config.app_config import BootstrapTargetConfig
 from src.db.repositories.bootstrap_backend_policy import (
     infer_startup_mode_for_selection,
+    project_backend_startup_fields_for_selection,
+    resolve_effective_startup_selection,
     resolve_backend_startup_fields,
     resolve_startup_key_preparer,
 )
@@ -33,7 +34,7 @@ from src.db.repositories.startup_bootstrap import (
     bootstrap_repository,
     migrate_repository,
 )
-from src.db.repositories.startup_selection import PathExists, StartupFieldName, StartupFieldRequirement
+from src.db.repositories.startup_selection import StartupFieldName, StartupFieldRequirement
 from src.security import PasswordValidationError, validate_password
 
 BootstrapRepositoryCallable = Callable[
@@ -84,15 +85,8 @@ class StartupDialogState:
     password_policy_hint: str
     allow_emergency_reset: bool
     key_file_path: str = ""
-    available_modes: tuple[StartupDialogMode, ...] = (
-        StartupDialogMode.CREATE,
-        StartupDialogMode.UNLOCK,
-    )
-    show_mode_selector: bool = False
     uses_remembered_target: bool = False
-    remembered_target_is_available: bool = False
     operator: str = ""
-    show_target_source_selector: bool = False
     show_dialect_picker: bool = True
     backend_fields: tuple[StartupFieldRequirement, ...] = ()
     show_migration_action: bool = False
@@ -211,19 +205,10 @@ def resolve_startup_fields(
         uses_remembered_target=uses_remembered_target,
         require_key_file=require_key_file,
     )
-
-
-def _filesystem_path_exists(database_path: str | PathLike[str]) -> bool:
-    """Return whether a startup-selected path currently exists on disk."""
-    return Path(database_path).exists()
-
-
 def resolve_startup_mode(
     dialect: str,
     database_path: str,
     fallback_mode: StartupDialogMode,
-    *,
-    path_exists: PathExists = _filesystem_path_exists,
 ) -> StartupDialogMode:
     """Return the backend-owned startup mode for the selected startup target."""
     return StartupDialogMode(
@@ -231,7 +216,6 @@ def resolve_startup_mode(
             dialect=dialect,
             database_path=database_path,
             fallback_mode=fallback_mode.value,
-            path_exists=path_exists,
         )
     )
 
@@ -281,21 +265,13 @@ class StartupDialogPresenter:
     ) -> StartupDialogState:
         """Return presenter-owned state recomputed from current operator input."""
         normalized_submission = self._normalize_submission(submission)
-        resolved_mode = self._startup_mode_resolver(
-            normalized_submission.dialect,
-            normalized_submission.database_path,
-            normalized_submission.mode,
-        )
-        resolved_use_remembered_target = normalized_submission.uses_remembered_target and (
-            resolved_mode is StartupDialogMode.UNLOCK
-        )
         return self.build_state(
-            mode=resolved_mode,
+            mode=normalized_submission.mode,
             dialect=normalized_submission.dialect,
             database_path=normalized_submission.database_path,
             key_file_path=normalized_submission.get_field_value(StartupFieldName.KEY_FILE_PATH),
             operator=normalized_submission.operator,
-            use_remembered_target=resolved_use_remembered_target,
+            use_remembered_target=normalized_submission.uses_remembered_target,
         )
 
     def build_state(
@@ -319,22 +295,31 @@ class StartupDialogPresenter:
         else:
             source_database_path = cast(str, database_path)
 
-        resolved_dialect = self._normalize_dialect(source_dialect or "")
-        resolved_database_path = self._normalize_database_path(source_database_path or "")
+        startup_selection = resolve_effective_startup_selection(
+            self._database_config,
+            submitted_dialect=cast(str, source_dialect or ""),
+            submitted_database_path=cast(str, source_database_path or ""),
+            uses_remembered_target=False,
+        )
+        resolved_dialect = self._normalize_dialect(startup_selection.dialect or "")
+        resolved_database_path = self._normalize_database_path(startup_selection.database_path or "")
         resolved_key_file_path = self._normalize_optional_path(key_file_path)
-        remembered_target_is_available = self._database_config.can_attempt_auto_open
+        can_attempt_auto_open = self._database_config.can_attempt_auto_open
+        target_locked = startup_selection.target_locked
 
         if mode is StartupDialogMode.CREATE:
-            backend_fields = self._startup_field_resolver(
+            raw_backend_fields = self._startup_field_resolver(
                 resolved_dialect,
                 mode,
                 False,
                 self._require_key_file_policy_for_mode(mode),
             )
-            backend_fields = self._filter_create_fields_for_unselected_sqlite_target(
-                dialect=resolved_dialect,
+            backend_fields = project_backend_startup_fields_for_selection(
+                resolved_dialect,
+                mode=mode.value,
                 database_path=resolved_database_path,
-                backend_fields=backend_fields,
+                target_locked=target_locked,
+                backend_fields=raw_backend_fields,
             )
 
             return StartupDialogState(
@@ -350,33 +335,54 @@ class StartupDialogPresenter:
                 password_policy_hint=self._build_password_policy_hint(),
                 allow_emergency_reset=False,
                 key_file_path=resolved_key_file_path,
-                show_mode_selector=False,
                 uses_remembered_target=False,
-                remembered_target_is_available=remembered_target_is_available,
                 operator=operator,
-                show_target_source_selector=False,
-                show_dialect_picker=True,
+                show_dialect_picker=not target_locked,
                 backend_fields=backend_fields,
             )
 
         if use_remembered_target is None:
-            resolved_use_remembered_target = remembered_target_is_available
+            resolved_use_remembered_target = can_attempt_auto_open
         else:
-            resolved_use_remembered_target = use_remembered_target and remembered_target_is_available
+            resolved_use_remembered_target = use_remembered_target and can_attempt_auto_open
 
-        backend_fields = self._startup_field_resolver(
+        if target_locked:
+            resolved_use_remembered_target = False
+
+        startup_selection = resolve_effective_startup_selection(
+            self._database_config,
+            submitted_dialect=cast(str, source_dialect or ""),
+            submitted_database_path=cast(str, source_database_path or ""),
+            uses_remembered_target=resolved_use_remembered_target,
+        )
+        resolved_dialect = self._normalize_dialect(startup_selection.dialect or "")
+        resolved_database_path = self._normalize_database_path(startup_selection.database_path or "")
+        target_locked = startup_selection.target_locked
+
+        raw_backend_fields = self._startup_field_resolver(
             resolved_dialect,
             mode,
-            resolved_use_remembered_target,
+            resolved_use_remembered_target or (target_locked and mode is StartupDialogMode.UNLOCK),
             self._require_key_file_policy_for_mode(mode),
+        )
+        backend_fields = project_backend_startup_fields_for_selection(
+            resolved_dialect,
+            mode=mode.value,
+            database_path=resolved_database_path,
+            target_locked=target_locked,
+            backend_fields=raw_backend_fields,
         )
 
         return StartupDialogState(
             mode=mode,
             title=(
                 "EventLog - Lås upp"
+                if target_locked
+                else (
+                "EventLog - Lås upp"
                 if resolved_use_remembered_target
                 else "EventLog - Öppna befintlig databas"
+                )
             ),
             submit_label="Lås upp",
             dialect=resolved_dialect,
@@ -385,12 +391,9 @@ class StartupDialogPresenter:
             password_policy_hint="",
             allow_emergency_reset=True,
             key_file_path=resolved_key_file_path,
-            show_mode_selector=False,
             uses_remembered_target=resolved_use_remembered_target,
-            remembered_target_is_available=remembered_target_is_available,
             operator=operator,
-            show_target_source_selector=remembered_target_is_available,
-            show_dialect_picker=not resolved_use_remembered_target,
+            show_dialect_picker=False if target_locked else not resolved_use_remembered_target,
             backend_fields=backend_fields,
         )
 
@@ -402,26 +405,9 @@ class StartupDialogPresenter:
 
         return "EventLog - Skapa krypterad databas"
 
-    @staticmethod
-    def _filter_create_fields_for_unselected_sqlite_target(
-        *,
-        dialect: str,
-        database_path: str,
-        backend_fields: tuple[StartupFieldRequirement, ...],
-    ) -> tuple[StartupFieldRequirement, ...]:
-        """Hide create-only access fields until a SQLite target path is chosen."""
-        if dialect != "sqlite" or database_path:
-            return backend_fields
-
-        return tuple(
-            field
-            for field in backend_fields
-            if field.field_name is StartupFieldName.DATABASE_PATH
-        )
-
     def submit(self, submission: StartupDialogSubmission) -> StartupDialogSubmissionResult:
         """Validate startup inputs and hand them into secure bootstrap orchestration."""
-        normalized_submission = self._normalize_submission(submission)
+        normalized_submission = self._normalize_submission(submission, infer_mode=False)
         local_failure = self._validate_submission(normalized_submission)
         if local_failure is not None:
             return StartupDialogSubmissionResult(failure=local_failure)
@@ -470,7 +456,7 @@ class StartupDialogPresenter:
 
     def migrate(self, submission: StartupDialogSubmission) -> StartupDialogMigrationResult:
         """Validate migration inputs and hand them into backend-owned migration execution."""
-        normalized_submission = self._normalize_submission(submission)
+        normalized_submission = self._normalize_submission(submission, infer_mode=False)
         local_failure = self._validate_submission(normalized_submission)
         if local_failure is not None:
             return StartupDialogMigrationResult(failure=local_failure)
@@ -676,16 +662,30 @@ class StartupDialogPresenter:
         normalized_dialect: str,
         mode: StartupDialogMode,
         uses_remembered_target: bool,
+        database_path: str,
+        target_locked: bool,
     ) -> tuple[StartupFieldRequirement, ...]:
         """Return the active backend field contract for the normalized submission."""
-        return self._startup_field_resolver(
+        raw_backend_fields = self._startup_field_resolver(
             normalized_dialect,
             mode,
             uses_remembered_target,
             self._require_key_file_policy_for_mode(mode),
         )
+        return project_backend_startup_fields_for_selection(
+            normalized_dialect,
+            mode=mode.value,
+            database_path=database_path,
+            target_locked=target_locked,
+            backend_fields=raw_backend_fields,
+        )
 
-    def _normalize_submission(self, submission: StartupDialogSubmission) -> _NormalizedStartupSubmission:
+    def _normalize_submission(
+        self,
+        submission: StartupDialogSubmission,
+        *,
+        infer_mode: bool = True,
+    ) -> _NormalizedStartupSubmission:
         """Return presenter-normalized startup input with remembered-target rules applied."""
         normalized_field_values = {
             StartupFieldName.DATABASE_PATH: self._normalize_database_path(
@@ -699,22 +699,42 @@ class StartupDialogPresenter:
                 submission.get_field_value(StartupFieldName.KEY_FILE_PATH)
             ),
         }
-        uses_remembered_target = submission.uses_remembered_target and (
+        submitted_dialect = self._normalize_dialect(submission.dialect)
+        requested_use_remembered_target = submission.uses_remembered_target and (
             submission.mode is StartupDialogMode.UNLOCK
         )
-
-        if uses_remembered_target:
-            dialect = self._normalize_dialect(self._database_config.dialect)
-            database_path = self._normalize_database_path(self._database_config.database_path)
-        else:
-            dialect = self._normalize_dialect(submission.dialect)
-            database_path = normalized_field_values[StartupFieldName.DATABASE_PATH]
+        startup_selection = resolve_effective_startup_selection(
+            self._database_config,
+            submitted_dialect=submitted_dialect,
+            submitted_database_path=normalized_field_values[StartupFieldName.DATABASE_PATH],
+            uses_remembered_target=requested_use_remembered_target,
+        )
+        uses_remembered_target = requested_use_remembered_target and not startup_selection.target_locked
+        dialect = self._normalize_dialect(startup_selection.dialect)
+        database_path = self._normalize_database_path(startup_selection.database_path)
 
         normalized_field_values[StartupFieldName.DATABASE_PATH] = database_path
-        backend_fields = self._resolve_backend_fields(dialect, submission.mode, uses_remembered_target)
+        if infer_mode:
+            resolved_mode = self._startup_mode_resolver(
+                dialect,
+                database_path,
+                submission.mode,
+            )
+        else:
+            resolved_mode = submission.mode
+        backend_fields = self._resolve_backend_fields(
+            dialect,
+            resolved_mode,
+            uses_remembered_target or (
+                startup_selection.target_locked
+                and resolved_mode is StartupDialogMode.UNLOCK
+            ),
+            database_path,
+            startup_selection.target_locked,
+        )
 
         return _NormalizedStartupSubmission(
-            mode=submission.mode,
+            mode=resolved_mode,
             uses_remembered_target=uses_remembered_target,
             dialect=dialect,
             operator=submission.operator.strip(),
@@ -722,6 +742,7 @@ class StartupDialogPresenter:
             field_values=normalized_field_values,
             backend_fields=backend_fields,
         )
+
 
     @staticmethod
     def _resolve_submitted_key_file_path(

@@ -8,11 +8,15 @@ window shell.
 
 from __future__ import annotations
 
+from enum import StrEnum
 import tkinter as tk
+from os import PathLike
 from typing import Callable, Protocol, cast
 
 from src.config import DatabaseConfig, MainWindowConfig
 from src.core.app_runtime_state import AppRuntimeState
+from src.db.adapters.event_log_adapter import EventLogAdapter
+from src.gui.presenters.communication_presenter import CommunicationPresenter
 from src.gui.presenters.startup_dialog_presenter import StartupDialogSuccess
 from src.gui.startup_dialog_controller import (
     EmergencyResetCallback,
@@ -23,6 +27,14 @@ from src.gui.views.main_window_shell_view import MainWindowShellView
 
 
 MainWindowLifecycleCallback = Callable[[], str | None]
+MainWindowFileActionCallback = Callable[[str | PathLike[str]], str | None]
+
+
+class MainWindowLifecycleAction(StrEnum):
+    """Shell-owned outcome for how the visible main-window phase should end."""
+
+    EXIT_APPLICATION = "exit_application"
+    RESTART_TO_STARTUP = "restart_to_startup"
 
 
 class AppShellRootProtocol(TkRootProtocol, Protocol):
@@ -33,6 +45,9 @@ class AppShellRootProtocol(TkRootProtocol, Protocol):
 
     def mainloop(self) -> None:
         """Run the Tk event loop until the root closes."""
+
+    def quit(self) -> None:
+        """Request that the current Tk main loop returns."""
 
 
 class StartupDialogRunner(Protocol):
@@ -64,8 +79,12 @@ class MainWindowFactory(Protocol):
         startup_result: StartupDialogSuccess,
         *,
         app_runtime_state: AppRuntimeState,
-        window_config: MainWindowConfig | None = None,
-        template_callback: MainWindowLifecycleCallback | None = None,
+        window_config: MainWindowConfig,
+        status_bar_log_level: str,
+        app_config_template_callback: MainWindowFileActionCallback | None = None,
+        communication_template_callback: MainWindowFileActionCallback | None = None,
+        communication_export_callback: MainWindowFileActionCallback | None = None,
+        communication_import_callback: MainWindowFileActionCallback | None = None,
         reset_callback: MainWindowLifecycleCallback | None = None,
         close_callback: MainWindowLifecycleCallback | None = None,
     ) -> object:
@@ -98,21 +117,37 @@ def _create_main_window_shell(
     startup_result: StartupDialogSuccess,
     *,
     app_runtime_state: AppRuntimeState,
-    window_config: MainWindowConfig | None = None,
-    template_callback: MainWindowLifecycleCallback | None = None,
+    window_config: MainWindowConfig,
+    status_bar_log_level: str,
+    app_config_template_callback: MainWindowFileActionCallback | None = None,
+    communication_template_callback: MainWindowFileActionCallback | None = None,
+    communication_export_callback: MainWindowFileActionCallback | None = None,
+    communication_import_callback: MainWindowFileActionCallback | None = None,
     reset_callback: MainWindowLifecycleCallback | None = None,
     close_callback: MainWindowLifecycleCallback | None = None,
 ) -> object:
     """Build the real minimal visible main-window shell."""
-    del startup_result
-    return MainWindowShellView(
+    main_window_factory = cast(Callable[..., MainWindowShellView], MainWindowShellView)
+    main_window = main_window_factory(
         root,
         app_runtime_state,
         window_config=window_config,
-        template_callback=template_callback,
+        status_bar_log_level=status_bar_log_level,
+        app_config_template_callback=app_config_template_callback,
+        communication_template_callback=communication_template_callback,
+        communication_export_callback=communication_export_callback,
+        communication_import_callback=communication_import_callback,
         reset_callback=reset_callback,
         close_callback=close_callback,
     )
+    communication_presenter = CommunicationPresenter(
+        cast(EventLogAdapter, startup_result.repository),
+        main_window.communication_tab_view,
+        app_runtime_state,
+    )
+    communication_presenter.attach()
+    setattr(main_window, "communication_presenter", communication_presenter)
+    return main_window
 
 
 class AppShell:
@@ -130,6 +165,7 @@ class AppShell:
         self._main_window_factory = main_window_factory
         self._root: AppShellRootProtocol | None = None
         self._main_window: object | None = None
+        self._main_window_lifecycle_action: MainWindowLifecycleAction | None = None
 
     def run_startup_dialog(
         self,
@@ -163,19 +199,28 @@ class AppShell:
         startup_result: StartupDialogSuccess,
         *,
         app_runtime_state: AppRuntimeState,
-        window_config: MainWindowConfig | None = None,
-        template_callback: MainWindowLifecycleCallback | None = None,
+        window_config: MainWindowConfig,
+        status_bar_log_level: str,
+        app_config_template_callback: MainWindowFileActionCallback | None = None,
+        communication_template_callback: MainWindowFileActionCallback | None = None,
+        communication_export_callback: MainWindowFileActionCallback | None = None,
+        communication_import_callback: MainWindowFileActionCallback | None = None,
         reset_callback: MainWindowLifecycleCallback | None = None,
         close_callback: MainWindowLifecycleCallback | None = None,
-    ) -> None:
-        """Turn the app-owned root into the visible main-window shell."""
+    ) -> MainWindowLifecycleAction:
+        """Turn the app-owned root into the visible shell and return its lifecycle outcome."""
         root = self._require_root()
+        self._main_window_lifecycle_action = MainWindowLifecycleAction.EXIT_APPLICATION
         self._main_window = self._main_window_factory(
             cast(tk.Tk, cast(object, root)),
             startup_result,
             app_runtime_state=app_runtime_state,
             window_config=window_config,
-            template_callback=template_callback,
+            status_bar_log_level=status_bar_log_level,
+            app_config_template_callback=app_config_template_callback,
+            communication_template_callback=communication_template_callback,
+            communication_export_callback=communication_export_callback,
+            communication_import_callback=communication_import_callback,
             reset_callback=reset_callback,
             close_callback=close_callback,
         )
@@ -183,14 +228,35 @@ class AppShell:
 
         try:
             root.mainloop()
-        finally:
+        except Exception:
             self.close()
+            raise
+
+        lifecycle_action = self._main_window_lifecycle_action or MainWindowLifecycleAction.EXIT_APPLICATION
+        self._main_window_lifecycle_action = None
+        self._teardown_main_window()
+
+        if lifecycle_action is MainWindowLifecycleAction.RESTART_TO_STARTUP:
+            root.withdraw()
+            return lifecycle_action
+
+        self.close()
+        return lifecycle_action
+
+    def request_restart_to_startup(self) -> None:
+        """End the visible main-window phase and return the app to fresh startup."""
+        self._signal_main_window_lifecycle_action(MainWindowLifecycleAction.RESTART_TO_STARTUP)
+
+    def request_exit_application(self) -> None:
+        """End the visible main-window phase and fully close the app shell."""
+        self._signal_main_window_lifecycle_action(MainWindowLifecycleAction.EXIT_APPLICATION)
 
     def close(self) -> None:
         """Destroy the app-owned root if it still exists."""
         root = self._root
         self._root = None
-        self._main_window = None
+        self._main_window_lifecycle_action = None
+        self._teardown_main_window()
         if root is None:
             return
 
@@ -208,6 +274,19 @@ class AppShell:
         provider = cast(MainWindowSettingsProvider, main_window)
         return provider.snapshot_window_config()
 
+    def refresh_communication_presenter_runtime_config(self) -> bool:
+        """Reload and re-render Communication config in the visible main window when available."""
+        main_window = self._main_window
+        if main_window is None or not hasattr(main_window, "communication_presenter"):
+            return False
+
+        communication_presenter = getattr(main_window, "communication_presenter")
+        if not hasattr(communication_presenter, "reload_runtime_config"):
+            return False
+
+        communication_presenter.reload_runtime_config()
+        return True
+
     def _ensure_root(self) -> AppShellRootProtocol:
         if self._root is None:
             self._root = cast(AppShellRootProtocol, self._root_factory())
@@ -222,9 +301,32 @@ class AppShell:
         assert self._root is not None
         return self._root
 
+    def _signal_main_window_lifecycle_action(self, action: MainWindowLifecycleAction) -> None:
+        self._main_window_lifecycle_action = action
+        root = self._root
+        if root is None:
+            return
+
+        root.quit()
+
+    def _teardown_main_window(self) -> None:
+        main_window = self._main_window
+        self._main_window = None
+        if main_window is None:
+            return
+
+        if hasattr(main_window, "destroy"):
+            getattr(main_window, "destroy")()
+            return
+
+        if hasattr(main_window, "dispose"):
+            getattr(main_window, "dispose")()
+
 
 __all__ = [
     "AppShell",
+    "MainWindowFileActionCallback",
+    "MainWindowLifecycleAction",
     "AppShellRootProtocol",
     "MainWindowLifecycleCallback",
     "MainWindowFactory",

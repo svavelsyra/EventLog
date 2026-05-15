@@ -11,13 +11,11 @@ from __future__ import annotations
 import tkinter as tk
 from dataclasses import replace
 from tkinter import filedialog
-from os import PathLike
-from pathlib import Path
 from typing import Callable, Protocol, cast
 
 from src.config import DatabaseConfig
 from src.core import ResetFollowUpIssue
-from src.db.repositories.startup_selection import PathExists, StartupFieldName
+from src.db.repositories.startup_selection import StartupFieldName
 from src.gui.presenters.startup_dialog_presenter import (
     StartupDialogFailureCode,
     StartupDialogPresenter,
@@ -90,9 +88,6 @@ class TkRootProtocol(Protocol):
 
 ViewFactory = Callable[[tk.Misc], StartupDialogViewProtocol]
 RootFactory = Callable[[], TkRootProtocol]
-KeyFileDialogOpener = Callable[[tk.Misc], str]
-DatabasePathDialogOpener = Callable[[tk.Misc], str]
-DatabasePathExists = PathExists
 
 
 class EmergencyResetResult(Protocol):
@@ -121,31 +116,6 @@ _RESET_FOLLOW_UP_MESSAGES = {
 _MANUAL_KEY_FILE_CLEANUP_ADVISORY = "Eventuella nyckelfiler behöver tas bort manuellt."
 
 
-
-def database_path_exists(database_path: str | PathLike[str]) -> bool:
-    """Return whether the selected database path already exists on disk."""
-    return Path(database_path).exists()
-
-
-DEFAULT_DATABASE_PATH_EXISTS: DatabasePathExists = database_path_exists
-
-
-def open_database_path_dialog(parent: tk.Misc) -> str:
-    """Open a database-path picker that supports both existing and new targets."""
-    return filedialog.asksaveasfilename(
-        parent=parent,
-        title="Välj eller ange databassökväg",
-        defaultextension=".db",
-        filetypes=(("Databasfiler", "*.db"), ("Alla filer", "*.*")),
-        confirmoverwrite=False,
-    )
-
-
-def open_key_file_dialog(parent: tk.Misc) -> str:
-    """Open the real key-file picker for the startup dialog."""
-    return filedialog.askopenfilename(parent=parent, title="Välj nyckelfil")
-
-
 class StartupDialogController:
     """Wire the startup presenter and startup view into a runnable Tk dialog."""
 
@@ -156,9 +126,6 @@ class StartupDialogController:
         last_operator_prefill: str = "",
         presenter: StartupDialogPresenter | None = None,
         view_factory: ViewFactory = StartupDialogView,
-        database_path_dialog_opener: DatabasePathDialogOpener = open_database_path_dialog,
-        key_file_dialog_opener: KeyFileDialogOpener = open_key_file_dialog,
-        database_path_exists: DatabasePathExists = DEFAULT_DATABASE_PATH_EXISTS,
         emergency_reset_callback: EmergencyResetCallback | None = None,
     ) -> None:
         self._presenter = presenter or StartupDialogPresenter(
@@ -167,12 +134,9 @@ class StartupDialogController:
                 dialect,
                 database_path,
                 fallback_mode,
-                path_exists=database_path_exists,
             ),
         )
         self._view_factory = view_factory
-        self._database_path_dialog_opener = database_path_dialog_opener
-        self._key_file_dialog_opener = key_file_dialog_opener
         self._emergency_reset_callback = emergency_reset_callback
         self._last_operator_prefill = last_operator_prefill.strip()
 
@@ -205,7 +169,6 @@ class StartupDialogController:
                 submit=self._handle_submit,
                 cancel=self._handle_cancel,
                 migrate=self._handle_migrate,
-                browse_database=self._handle_browse_database,
                 browse_key_file=self._handle_browse_key_file,
                 emergency_reset=(
                     self._handle_emergency_reset
@@ -289,20 +252,9 @@ class StartupDialogController:
         self._result = None
         self._close_dialog()
 
-    def _handle_browse_database(self) -> None:
-        view = self._require_view()
-        selected_path = self._database_path_dialog_opener(view.window)
-        if not selected_path:
-            return
-
-        self._render_current_submission_with_updates(
-            field_updates={StartupFieldName.DATABASE_PATH: selected_path},
-            uses_remembered_target=False,
-        )
-
     def _handle_browse_key_file(self) -> None:
         view = self._require_view()
-        selected_path = self._key_file_dialog_opener(view.window)
+        selected_path = filedialog.askopenfilename(parent=view.window, title="Välj nyckelfil")
         if not selected_path:
             return
 
@@ -354,25 +306,20 @@ class StartupDialogController:
         self,
         *,
         field_updates: dict[StartupFieldName, str] | None = None,
-        uses_remembered_target: bool | None = None,
     ) -> None:
         view = self._require_view()
         current_submission = view.get_submission()
-        if field_updates is None and uses_remembered_target is None:
+        if field_updates is None:
             self._render_state_from_submission(current_submission)
             return
 
         updated_field_values = dict(current_submission.field_values)
-        if field_updates is not None:
-            updated_field_values.update(field_updates)
-        resolved_uses_remembered_target = cast(bool, current_submission.uses_remembered_target)
-        if uses_remembered_target is not None:
-            resolved_uses_remembered_target = cast(bool, uses_remembered_target)
+        updated_field_values.update(field_updates)
         updated_submission = StartupDialogSubmission(
             mode=current_submission.mode,
             dialect=current_submission.dialect,
             operator=current_submission.operator,
-            uses_remembered_target=resolved_uses_remembered_target,
+            uses_remembered_target=cast(bool, current_submission.uses_remembered_target),
             field_values=updated_field_values,
         )
 
@@ -426,17 +373,11 @@ class StartupDialogController:
 
 __all__ = [
     "EmergencyResetCallback",
-    "DatabasePathDialogOpener",
-    "DatabasePathExists",
-    "KeyFileDialogOpener",
     "RootFactory",
     "StartupDialogController",
     "StartupDialogViewProtocol",
     "TkRootProtocol",
     "ViewFactory",
-    "database_path_exists",
-    "open_database_path_dialog",
-    "open_key_file_dialog",
 ]
 
 

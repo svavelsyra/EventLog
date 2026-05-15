@@ -23,9 +23,13 @@ DEFAULT_WINDOW_HEIGHT = 700
 DEFAULT_WINDOW_X = 100
 DEFAULT_WINDOW_Y = 100
 DEFAULT_TEMPLATE_DIALECT = "sqlite"
+APP_RUNTIME_DATA_DIRECTORY_NAME = "data"
+DEFAULT_CONFIG_FILENAME = "config.ini"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_FILE_LOGGING_ENABLED = True
-DEFAULT_LOG_FILE_PATH = "logs/eventlog.log"
+DEFAULT_LOG_DIRECTORY_NAME = "logs"
+DEFAULT_LOG_FILE_NAME = "eventlog.log"
+DEFAULT_LOG_FILE_PATH = (Path(DEFAULT_LOG_DIRECTORY_NAME) / DEFAULT_LOG_FILE_NAME).as_posix()
 DEFAULT_LOG_FILE_MAX_BYTES = 10_485_760
 DEFAULT_LOG_FILE_BACKUP_COUNT = 5
 DEFAULT_CONSOLE_LOGGING_ENABLED = True
@@ -36,6 +40,7 @@ DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 CONFIG_TEMPLATE_FILENAME = "config.ini.template"
 
 _SUPPORTED_WINDOW_STATES = frozenset({"normal", "zoomed"})
+_SUPPORTED_LOG_LEVEL_NAMES = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 
 
 def _escape_template_option_value(value: str) -> str:
@@ -144,6 +149,7 @@ class BootstrapUiConfig:
     main_window: MainWindowConfig = field(default_factory=MainWindowConfig)
     language: str = DEFAULT_LANGUAGE
     last_operator: str = ""
+    status_bar_log_level: str = DEFAULT_STATUS_BAR_LOG_LEVEL
 
 
 def load_app_config(config_path: str | PathLike[str]) -> ConfigParser:
@@ -321,6 +327,37 @@ def _normalize_language(value: str) -> str:
     return normalized_value or DEFAULT_LANGUAGE
 
 
+def _normalize_log_level_name(value: str) -> str:
+    """Return a normalized supported log-level name or the code default."""
+    normalized_value = value.strip().upper()
+    if normalized_value in _SUPPORTED_LOG_LEVEL_NAMES:
+        return normalized_value
+
+    return DEFAULT_STATUS_BAR_LOG_LEVEL
+
+
+def _get_supported_log_level_option(
+    parser: ConfigParser,
+    section: str | None,
+    option: str,
+    *,
+    default: str,
+) -> str:
+    """Return a supported uppercase log-level name or the provided default."""
+    lookup_section = _resolve_lookup_section(parser, section)
+    resolved_value = parser.get(lookup_section, option, fallback=default).strip().upper()
+    if resolved_value in _SUPPORTED_LOG_LEVEL_NAMES:
+        return resolved_value
+
+    LOGGER.warning(
+        "Invalid config value for %s.%s; using default %r.",
+        lookup_section,
+        option,
+        default,
+    )
+    return default
+
+
 def _normalize_window_state(value: str) -> str:
     """Return a supported persisted window state for storage."""
     normalized_value = value.strip().lower()
@@ -336,7 +373,7 @@ def _get_selected_dialect(parser: ConfigParser) -> str:
 
 
 def parse_bootstrap_ui_config(parser: ConfigParser) -> BootstrapUiConfig:
-    """Extract bootstrap-owned main-window and startup-user convenience settings."""
+    """Extract bootstrap-owned UI settings plus selected shell logging display policy."""
     return BootstrapUiConfig(
         main_window=MainWindowConfig(
             window_state=_get_supported_window_state_option(
@@ -372,6 +409,12 @@ def parse_bootstrap_ui_config(parser: ConfigParser) -> BootstrapUiConfig:
         ),
         language=_normalize_language(_get_stripped_option(parser, "Application", "language")),
         last_operator=_get_stripped_option(parser, "User", "last_operator"),
+        status_bar_log_level=_get_supported_log_level_option(
+            parser,
+            "Logging",
+            "status_bar_log_level",
+            default=DEFAULT_STATUS_BAR_LOG_LEVEL,
+        ),
     )
 
 
@@ -419,7 +462,8 @@ def render_config_template() -> str:
 
     template_lines = [
         "# EventLog Application Configuration Template",
-        "# Copy this to config.ini and customize for your installation",
+        "# Copy this to data/config.ini and customize for your installation",
+        "# The default live runtime config is app-local under the data/ folder.",
         "",
         "[DEFAULT]",
         "# Shared fallback values for bootstrap/security-related settings.",
@@ -457,6 +501,8 @@ def render_config_template() -> str:
         "# SQLite-specific overrides for shared [DEFAULT] values may also be added here if needed.",
         "# These values help prefill the startup UI, but they are not authoritative and",
         "# must never prevent recovery-capable startup if they are missing or malformed.",
+        "# With the default live config at data/config.ini, the managed runtime SQLite",
+        "# database lives beside it as data/eventlog.db.",
         "",
         "# Remembered last-used SQLite database target/path.",
         "database_path = eventlog.db",
@@ -477,6 +523,8 @@ def render_config_template() -> str:
         "",
         "# File logging",
         f"file_logging_enabled = {str(DEFAULT_FILE_LOGGING_ENABLED).lower()}",
+        "# With the default live config at data/config.ini, this relative path resolves",
+        "# to data/logs/eventlog.log.",
         f"log_file_path = {DEFAULT_LOG_FILE_PATH}",
         f"log_file_max_bytes = {DEFAULT_LOG_FILE_MAX_BYTES}  # 10 MB per file",
         f"log_file_backup_count = {DEFAULT_LOG_FILE_BACKUP_COUNT}  # Keep {DEFAULT_LOG_FILE_BACKUP_COUNT} old log files (total ~50 MB)",

@@ -74,7 +74,7 @@ Domain entity representing radio/phone/in-person communications and written orde
   - `RA180`
   - `Motorola`
   - `Rakel`
-  - `Courier`
+  - `Kurir`
   - `Spoken Word`
 - **Historical storage**: The chosen base way/system must remain readable even if configuration changes later
 
@@ -112,7 +112,7 @@ Domain entity representing radio/phone/in-person communications and written orde
 - **RA180 common practical setup**: `communication_system="RA180"`, `communication_path=[{"value": "2", "label": "Channel 2"}]`, `communication_qualifiers={"encrypted": true, "data": true}`
 - **Motorola clear radio**: `communication_system="Motorola"`, `communication_path=[{"value": "A", "label": "Channel A"}]`, `communication_qualifiers={"encrypted": false}`
 - **Rakel simplified Phase 1**: `communication_system="Rakel"`, `communication_path=[{"value": "X", "label": "Channel X"}]`, `communication_qualifiers={"encrypted": true}`
-- **Courier**: `communication_system="Courier"`, `communication_path=[]`, qualifier visibility defined by configuration for that system
+- **Kurir**: `communication_system="Kurir"`, `communication_path=[]`, qualifier visibility defined by configuration for that system
 
 #### Communication Configuration Rules (Settings)
 
@@ -137,7 +137,7 @@ Domain entity representing radio/phone/in-person communications and written orde
 - **Rakel**:
   - uses channels
   - simplified to `encrypted` forced true in Phase 1
-- **Courier**:
+- **Kurir**:
   - non-radio example included to prove the shared model is not radio-only
   - lower tiers may be unused in Phase 1
 

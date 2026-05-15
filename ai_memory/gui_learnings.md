@@ -2,7 +2,7 @@
 
 **Purpose**: Durable Tkinter, presenter/view, and GUI-testing guidance for this project.
 
-**Last Updated**: 2026-05-07 (Session 102 - Refocused file on durable GUI guidance instead of session chronology)
+**Last Updated**: 2026-05-13 (Session 121 - Main-window export/template actions should use explicit save dialogs)
 
 ---
 
@@ -11,10 +11,17 @@
 - Keep reusable GUI rules, stable boundary decisions, and durable testing patterns here.
 - Keep session-by-session narration, temporary migration notes, and "I changed X" history in `session_logs/`.
 - Favor compact, high-signal rules over exhaustive historical context.
+- Do not store one-off widget placements or task-local visual decisions here unless they express a broader cross-session preference the AI should reliably reuse.
 
 ---
 
 ## Tkinter Layout And Sizing
+
+### Prefer simpler dynamic layout patterns over dense per-widget grid spacing when they fit the UI
+
+- User preference: when a Tkinter slice is naturally linear or adaptive, prefer a dynamic `pack(...)`-oriented layout over a heavily hand-spaced `grid(...)` layout with many per-widget `padx` / `pady` tweaks.
+- Do not treat `grid(...)` as the default just because a form has several controls; choose the layout manager that keeps the structure clearer and the code less noisy.
+- If `grid(...)` is still the better fit for a form/table slice, keep spacing decisions as coarse and shared as practical instead of repeating many tiny manual spacing adjustments.
 
 ### Prefer grid weights and sticky expansion over fixed widths
 
@@ -84,10 +91,26 @@
 - When one notifier can safely satisfy both `command=` and `bind(...)`, prefer wiring directly to that notifier over naming multiple identical pass-through wrappers.
 - If several direct actions are distinct but belong to the same registration concern, bundle them in one stable action-callback contract.
 - Once the final seam is adopted, remove obsolete compatibility wrappers instead of leaving dead transitional API behind.
+- Do not add a helper that merely forwards to a Tkinter dialog or stdlib filesystem builtin with the same arguments; if the caller is the only place that knows the correct title/filetypes/behavior, keep that configuration at the caller and inject only the callable seam the tests actually need.
+- Prefer monkeypatching Tk/stdlib side effects in tests over adding constructor parameters purely so tests can override `filedialog`, `messagebox`, or filesystem-existence calls. If an override hook only exists to avoid patching a standard library function, that is usually a bad production seam.
 
 ---
 
 ## Startup Dialog Specific Guidance
+
+### Local SQLite startup now assumes one fixed app-owned active database location
+
+- For the current local SQLite model, the startup UI should treat the application as having one active database only, stored at one fixed app-owned location.
+- Do not present ordinary operators with arbitrary database-path selection during startup for this mode.
+- If the managed database exists, startup should stay attached to that target and show the appropriate unlock/open flow.
+- If the managed database is missing, startup should fall back to create flow for that same managed location.
+- If the operator wants to preserve an old database copy, the expected workflow is manual file move/copy outside the managed location rather than keeping multiple active startup-selectable targets inside the app.
+
+### Prefer one reset lifecycle: Nollställ returns to fresh startup state in-process
+
+- Preferred product direction: after `Nollställ`, the app should return to the startup dialog / fresh bootstrap state instead of exiting the process.
+- Treat this as acceptable even though the Python process remains alive; the project does not promise full forensic-memory eradication, and the simpler coherent operator flow is more important here.
+- Avoid splitting reset semantics into separate "startup reset exits" versus "main-window reset restarts" behaviors unless there is a very strong reason.
 
 ### Infer SQLite create vs unlock from the selected path
 
@@ -108,6 +131,7 @@
 - Keep destructive reset wired through app-owned callbacks, not widget-local cleanup code.
 - Keep normal shell close on a separate app-owned seam from destructive reset.
 - The shell view should stay thin: register callbacks, display coarse status, and let app ownership decide whether the window closes.
+- For user-triggered template generation or exports, let the GUI ask for an explicit destination path with a save dialog instead of silently writing beside some internal config file; this makes the destination visible and keeps path-picking in the GUI layer.
 
 ---
 
@@ -131,3 +155,11 @@
 - When a GUI refactor collapses several widget handlers into one shared notifier or dispatcher, update tests to drive the real widgets/bindings again rather than preserving the old event count by calling the shared internal helper repeatedly.
 - In Tk view tests, prefer a realistic widget trigger with any needed focus/update steps over a bare `event_generate(...)` that only approximates the UI path and may silently miss the real binding behavior.
 - When view state synchronization must preserve hidden values across rerenders, add at least one regression that drives a visible-to-hidden transition and confirms `get_submission()` returns the presenter-owned current value rather than stale previously visible widget text.
+
+### During active UI-only polish, defer test churn until the layout stabilizes
+
+- When the user is iterating on visual alignment/spacing/layout polish, prefer the lightest safe validation loop during intermediate steps.
+- For those UI-only iterations, use `get_errors` as the default immediate guardrail and avoid broad `pytest` reruns after every small layout tweak unless the user explicitly asks for validation or the change is no longer purely visual.
+- Likewise, defer updating fragile view-layout assertions until the user signals that the UI shape is stable enough to lock in.
+- Before declaring the UI slice complete, still do one final round of the appropriate test updates and validation so the stabilized layout contract is recorded intentionally rather than churned on every micro-adjustment.
+

@@ -21,7 +21,6 @@ from src.gui.presenters.startup_dialog_presenter import (
     StartupDialogMode,
     StartupDialogPresenter,
     StartupDialogSubmission,
-    resolve_startup_mode,
 )
 from src.security import GENERIC_INVALID_CREDENTIALS_MESSAGE
 
@@ -50,12 +49,14 @@ def _make_mode_resolver(*existing_paths: str):
     normalized_existing_paths = {path.strip() for path in existing_paths}
 
     def _resolver(dialect: str, database_path: str, fallback_mode: StartupDialogMode) -> StartupDialogMode:
-        return resolve_startup_mode(
-            dialect,
-            database_path,
-            fallback_mode,
-            path_exists=lambda path: str(path).strip() in normalized_existing_paths,
-        )
+        if dialect.strip().lower() != "sqlite":
+            return fallback_mode
+
+        normalized_database_path = database_path.strip()
+        if normalized_database_path and normalized_database_path in normalized_existing_paths:
+            return StartupDialogMode.UNLOCK
+
+        return StartupDialogMode.CREATE
 
     return _resolver
 
@@ -98,10 +99,7 @@ def test_get_initial_state_prefers_unlock_when_bootstrap_target_is_complete() ->
     assert state.submit_label == "Lås upp"
     assert state.password_policy_hint == ""
     assert state.allow_emergency_reset is True
-    assert state.uses_remembered_target is True
-    assert state.remembered_target_is_available is True
-    assert state.show_mode_selector is False
-    assert state.show_target_source_selector is True
+    assert state.uses_remembered_target is False
     assert state.show_dialect_picker is False
     assert [field.field_name for field in state.backend_fields] == [StartupFieldName.PASSWORD]
     assert state.backend_fields[0].kind is StartupFieldKind.PASSWORD
@@ -118,7 +116,6 @@ def test_get_initial_state_falls_back_to_create_when_remembered_target_path_is_m
     assert state.mode is StartupDialogMode.CREATE
     assert state.title == "EventLog - Skapa krypterad databas"
     assert state.uses_remembered_target is False
-    assert state.show_target_source_selector is False
     assert StartupFieldName.PASSWORD_CONFIRMATION in [field.field_name for field in state.backend_fields]
 
 
@@ -133,10 +130,6 @@ def test_get_initial_state_falls_back_to_create_when_bootstrap_target_is_missing
     assert state.dialect == ""
     assert state.password_policy_hint == "Minst 8 tecken för nytt lösenord."
     assert state.allow_emergency_reset is False
-    assert state.show_mode_selector is False
-    assert state.available_modes == (StartupDialogMode.CREATE, StartupDialogMode.UNLOCK)
-    assert state.remembered_target_is_available is False
-    assert state.show_target_source_selector is False
     assert state.show_dialect_picker is True
     assert state.backend_fields == ()
 
@@ -259,8 +252,6 @@ def test_build_state_for_manual_existing_database_shows_target_fields_when_no_re
     assert state.dialect == "sqlite"
     assert state.database_path == ""
     assert state.uses_remembered_target is False
-    assert state.remembered_target_is_available is False
-    assert state.show_target_source_selector is False
     assert state.show_dialect_picker is True
     assert state.allow_emergency_reset is True
     assert [field.field_name for field in state.backend_fields] == [
@@ -273,7 +264,7 @@ def test_build_state_for_manual_existing_database_shows_target_fields_when_no_re
     assert state.backend_fields[-1].required is False
 
 
-def test_build_state_can_force_manual_existing_database_selection_even_when_target_is_remembered() -> None:
+def test_build_state_for_managed_sqlite_unlock_ignores_manual_target_selection_request() -> None:
     presenter = StartupDialogPresenter(_make_config())
 
     state = presenter.build_state(
@@ -282,23 +273,19 @@ def test_build_state_can_force_manual_existing_database_selection_even_when_targ
         database_path="D:/Ops/eventlog.db",
     )
 
-    assert state.title == "EventLog - Öppna befintlig databas"
+    assert state.title == "EventLog - Lås upp"
     assert state.uses_remembered_target is False
-    assert state.remembered_target_is_available is True
-    assert state.show_target_source_selector is True
-    assert state.show_dialect_picker is True
-    assert state.database_path == "D:/Ops/eventlog.db"
+    assert state.show_dialect_picker is False
+    assert state.database_path == "eventlog.db"
     assert [field.field_name for field in state.backend_fields] == [
-        StartupFieldName.DATABASE_PATH,
         StartupFieldName.PASSWORD,
-        StartupFieldName.KEY_FILE_PATH,
     ]
 
 
-def test_recompute_state_switches_existing_manual_target_to_unlock_without_reusing_remembered_target() -> None:
+def test_recompute_state_for_managed_sqlite_ignores_manual_target_and_uses_managed_unlock_state() -> None:
     presenter = StartupDialogPresenter(
         _make_config(),
-        startup_mode_resolver=_make_mode_resolver("C:/Ops/existing.db"),
+        startup_mode_resolver=_make_mode_resolver("eventlog.db"),
     )
 
     state = presenter.recompute_state(
@@ -312,16 +299,17 @@ def test_recompute_state_switches_existing_manual_target_to_unlock_without_reusi
     )
 
     assert state.mode is StartupDialogMode.UNLOCK
-    assert state.title == "EventLog - Öppna befintlig databas"
+    assert state.title == "EventLog - Lås upp"
     assert state.uses_remembered_target is False
-    assert state.show_dialect_picker is True
+    assert state.show_dialect_picker is False
+    assert state.database_path == "eventlog.db"
     assert StartupFieldName.PASSWORD_CONFIRMATION not in [field.field_name for field in state.backend_fields]
 
 
-def test_recompute_state_switches_missing_manual_target_back_to_create_and_drops_remembered_target() -> None:
+def test_recompute_state_for_managed_sqlite_uses_missing_managed_target_create_state() -> None:
     presenter = StartupDialogPresenter(
-        _make_config(dialect="sqlite", database_path="eventlog.db"),
-        startup_mode_resolver=_make_mode_resolver("eventlog.db"),
+        _make_config(dialect="sqlite", database_path="C:/Ops/managed.db"),
+        startup_mode_resolver=_make_mode_resolver(),
     )
 
     state = presenter.recompute_state(
@@ -336,6 +324,8 @@ def test_recompute_state_switches_missing_manual_target_back_to_create_and_drops
     assert state.mode is StartupDialogMode.CREATE
     assert state.title == "EventLog - Skapa krypterad databas"
     assert state.uses_remembered_target is False
+    assert state.show_dialect_picker is False
+    assert state.database_path == "C:/Ops/managed.db"
     assert StartupFieldName.PASSWORD_CONFIRMATION in [field.field_name for field in state.backend_fields]
 
 
@@ -374,6 +364,8 @@ def test_recompute_state_preserves_key_file_path_in_view_state() -> None:
 
 
 def test_submit_manual_unlock_remembers_actual_key_file_usage_after_success(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing.db"
+    database_path.write_text("", encoding="utf-8")
     sentinel_repository = cast(BaseRepository, object())
 
     def fake_bootstrap(_request):
@@ -388,7 +380,7 @@ def test_submit_manual_unlock_remembers_actual_key_file_usage_after_success(tmp_
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path=str(tmp_path / "existing.db"),
+            database_path=str(database_path),
             password="lösenord123",
             uses_remembered_target=False,
             key_file_path=tmp_path / "manual.key",
@@ -476,14 +468,16 @@ def test_submit_create_rejects_too_short_password_before_bootstrap() -> None:
     assert bootstrap_called is False
 
 
-def test_submit_unlock_requires_key_file_when_mode_requires_it() -> None:
-    presenter = StartupDialogPresenter(_make_config(require_key_file=True))
+def test_submit_unlock_requires_key_file_when_mode_requires_it(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
+    presenter = StartupDialogPresenter(_make_config(require_key_file=True, database_path=str(database_path)))
 
     result = presenter.submit(
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
         )
     )
@@ -656,7 +650,10 @@ def test_submit_successfully_hands_off_to_bootstrap_with_sqlite_key_preparer(tmp
     }
 
 
-def test_submit_maps_invalid_credentials_to_retryable_password_clear() -> None:
+def test_submit_maps_invalid_credentials_to_retryable_password_clear(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
+
     def fake_bootstrap(_request):
         return BootstrapRepositoryResult(
             failure=BootstrapFailure(
@@ -665,13 +662,16 @@ def test_submit_maps_invalid_credentials_to_retryable_password_clear() -> None:
             )
         )
 
-    presenter = StartupDialogPresenter(_make_config(), bootstrap_callback=fake_bootstrap)
+    presenter = StartupDialogPresenter(
+        _make_config(database_path=str(database_path)),
+        bootstrap_callback=fake_bootstrap,
+    )
 
     result = presenter.submit(
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
         )
     )
@@ -685,7 +685,10 @@ def test_submit_maps_invalid_credentials_to_retryable_password_clear() -> None:
     assert result.failure.should_clear_password_confirmation is False
 
 
-def test_submit_maps_invalid_key_file_to_field_error() -> None:
+def test_submit_maps_invalid_key_file_to_field_error(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
+
     def fake_bootstrap(_request):
         return BootstrapRepositoryResult(
             failure=BootstrapFailure(
@@ -694,13 +697,16 @@ def test_submit_maps_invalid_key_file_to_field_error() -> None:
             )
         )
 
-    presenter = StartupDialogPresenter(_make_config(require_key_file=True), bootstrap_callback=fake_bootstrap)
+    presenter = StartupDialogPresenter(
+        _make_config(require_key_file=True, database_path=str(database_path)),
+        bootstrap_callback=fake_bootstrap,
+    )
 
     result = presenter.submit(
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
             key_file_path="C:/keys/secret.key",
         )
@@ -713,7 +719,10 @@ def test_submit_maps_invalid_key_file_to_field_error() -> None:
     assert result.failure.message == "Kan inte läsa nyckelfilen (behörighet saknas)"
 
 
-def test_submit_maps_migration_needed_to_dedicated_failure_code() -> None:
+def test_submit_maps_migration_needed_to_dedicated_failure_code(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
+
     def fake_bootstrap(_request):
         return BootstrapRepositoryResult(
             failure=BootstrapFailure(
@@ -723,13 +732,16 @@ def test_submit_maps_migration_needed_to_dedicated_failure_code() -> None:
             )
         )
 
-    presenter = StartupDialogPresenter(_make_config(), bootstrap_callback=fake_bootstrap)
+    presenter = StartupDialogPresenter(
+        _make_config(database_path=str(database_path)),
+        bootstrap_callback=fake_bootstrap,
+    )
 
     result = presenter.submit(
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
         )
     )
@@ -744,7 +756,10 @@ def test_submit_maps_migration_needed_to_dedicated_failure_code() -> None:
     assert result.failure.should_clear_password is False
 
 
-def test_submit_maps_database_newer_to_dedicated_failure_code() -> None:
+def test_submit_maps_database_newer_to_dedicated_failure_code(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
+
     def fake_bootstrap(_request):
         return BootstrapRepositoryResult(
             failure=BootstrapFailure(
@@ -754,13 +769,16 @@ def test_submit_maps_database_newer_to_dedicated_failure_code() -> None:
             )
         )
 
-    presenter = StartupDialogPresenter(_make_config(), bootstrap_callback=fake_bootstrap)
+    presenter = StartupDialogPresenter(
+        _make_config(database_path=str(database_path)),
+        bootstrap_callback=fake_bootstrap,
+    )
 
     result = presenter.submit(
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
         )
     )
@@ -775,7 +793,9 @@ def test_submit_maps_database_newer_to_dedicated_failure_code() -> None:
     assert result.failure.should_clear_password is False
 
 
-def test_migrate_successfully_hands_off_to_backend_owned_migration() -> None:
+def test_migrate_successfully_hands_off_to_backend_owned_migration(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
     captured: dict[str, object] = {}
 
     def fake_migration(request: MigrationRequest) -> MigrationResult:
@@ -786,7 +806,7 @@ def test_migrate_successfully_hands_off_to_backend_owned_migration() -> None:
         return MigrationResult(migration_performed=True, message="Databasmigreringen slutfördes.")
 
     presenter = StartupDialogPresenter(
-        _make_config(),
+        _make_config(database_path=str(database_path)),
         migration_callback=fake_migration,
     )
 
@@ -794,21 +814,24 @@ def test_migrate_successfully_hands_off_to_backend_owned_migration() -> None:
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
         )
     )
 
     assert result == StartupDialogMigrationResult(message="Databasmigreringen slutfördes.")
     assert captured == {
-        "target": _make_config().bootstrap_target,
+        "target": _make_config(database_path=str(database_path)).bootstrap_target,
         "password": "lösenord123",
         "key_file_path": None,
         "key_preparer": prepare_sqlite_encryption_key,
     }
 
 
-def test_migrate_maps_backend_failure_to_presenter_visible_migration_failed_error() -> None:
+def test_migrate_maps_backend_failure_to_presenter_visible_migration_failed_error(tmp_path: Path) -> None:
+    database_path = tmp_path / "eventlog.db"
+    database_path.write_text("", encoding="utf-8")
+
     def fake_migration(_request: MigrationRequest) -> MigrationResult:
         return MigrationResult(
             failure=BootstrapFailure(
@@ -818,13 +841,16 @@ def test_migrate_maps_backend_failure_to_presenter_visible_migration_failed_erro
             )
         )
 
-    presenter = StartupDialogPresenter(_make_config(), migration_callback=fake_migration)
+    presenter = StartupDialogPresenter(
+        _make_config(database_path=str(database_path)),
+        migration_callback=fake_migration,
+    )
 
     result = presenter.migrate(
         _make_submission(
             mode=StartupDialogMode.UNLOCK,
             dialect="sqlite",
-            database_path="eventlog.db",
+            database_path=str(database_path),
             password="lösenord123",
         )
     )
@@ -847,6 +873,7 @@ def test_submit_remembered_unlock_ignores_hidden_manual_target_values() -> None:
     presenter = StartupDialogPresenter(
         _make_config(dialect="sqlite", database_path="C:/Ops/remembered.db"),
         bootstrap_callback=fake_bootstrap,
+        startup_mode_resolver=_make_mode_resolver("C:/Ops/remembered.db"),
     )
 
     result = presenter.submit(

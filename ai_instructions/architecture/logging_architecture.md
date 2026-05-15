@@ -18,7 +18,7 @@ Logging provides debugging and operational insights without compromising user da
 
 ### Config File (config.ini)
 
-**Location**: Application root directory (same level as src/)
+**Location**: App-local runtime data folder. With the default live config at `data/config.ini`, the relative `log_file_path = logs/eventlog.log` setting resolves to `data/logs/eventlog.log`.
 
 **Logging Section**:
 ```ini
